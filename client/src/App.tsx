@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type DragEvent } from "react";
 import { AlertTriangle, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Clock3, FolderKanban, LayoutDashboard, ListTodo, LoaderCircle, Menu, MoreHorizontal, RefreshCw, ShieldAlert, Sheet, Sparkles, Target, Unplug, X } from "lucide-react";
 import { api } from "./api";
 import type { Health, PortfolioData, PortfolioMetrics, ProjectMetrics, Session, SheetFile, Task } from "./types";
@@ -58,9 +58,13 @@ function App() {
   }, []);
 
   const updatePortfolio = (next: PortfolioState) => {
+    persistPortfolio(next);
+    setNotice(next.data.source === "google_sheets" ? `Loaded ${next.data.spreadsheetName ?? "Google Sheet"}.` : null);
+  };
+
+  const persistPortfolio = (next: PortfolioState) => {
     setPortfolio(next);
     window.localStorage.setItem(cacheKey, JSON.stringify(next));
-    setNotice(next.data.source === "google_sheets" ? `Loaded ${next.data.spreadsheetName ?? "Google Sheet"}.` : null);
   };
 
   if (!portfolio || !session) return <LoadingScreen />;
@@ -100,7 +104,7 @@ function App() {
         {view === "dashboard" && <Dashboard state={portfolio} onOpenConnect={() => setShowConnect(true)} onViewProjects={() => setView("projects")} />}
         {view === "projects" && <ProjectsView state={portfolio} onSelectGantt={() => setView("gantt")} />}
         {view === "gantt" && <GanttView state={portfolio} />}
-        {view === "work" && <WorkView state={portfolio} />}
+        {view === "work" && <WorkView state={portfolio} onStateChange={persistPortfolio} />}
       </main>
 
       {showConnect && <ConnectModal session={session} state={portfolio} onClose={() => setShowConnect(false)} onSession={setSession} onImport={(next) => { updatePortfolio(next); setShowConnect(false); }} />}
@@ -152,7 +156,7 @@ function PanelHeading({ title, subtitle, action, onAction }: { title: string; su
 }
 
 function HealthPill({ health }: { health: Health }) { return <span className={`pill health-${health}`}>{healthLabel[health]}</span>; }
-function TaskPill({ status }: { status: Task["status"] }) { return <span className={`pill task-${status}`}>{statusLabel[status]}</span>; }
+function TaskPill({ status, label }: { status: Task["status"]; label?: string }) { return <span className={`pill task-${status}`}>{label ?? statusLabel[status]}</span>; }
 function Progress({ value, compact = false }: { value: number; compact?: boolean }) { return <div className={`progress ${compact ? "compact" : ""}`}><div><span style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div><strong>{Math.round(value)}%</strong></div>; }
 
 function AttentionList({ items }: { items: PortfolioMetrics["attentionItems"] }) {
@@ -206,14 +210,102 @@ function GanttRow({ task, startColumn, span, weeks }: { task: Task; startColumn:
   return <><div className="gantt-task"><strong>{task.title}</strong><small>{task.owner ?? "Unassigned"} · {formatShortDate(task.startDate)} — {formatShortDate(task.dueDate)}</small></div>{Array.from({ length: weeks }, (_, index) => <div className="gantt-cell" key={index} />)}<div className={`gantt-bar ${task.status}`} style={{ gridColumn: `${startColumn} / span ${span}` }} title={`${task.title}: ${statusLabel[task.status]}`}><span>{task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)}%</span></div></>;
 }
 
-function WorkView({ state }: { state: PortfolioState }) {
+function workflowToTaskStatus(workflowStatus: string): Task["status"] {
+  const text = workflowStatus.toLowerCase();
+  if (/done|complete|closed|resolved|finished/.test(text)) return "done";
+  if (/block|imped|hold/.test(text)) return "blocked";
+  if (/cancel|wont do|won't do/.test(text)) return "cancelled";
+  if (/progress|active|review|testing|ready/.test(text)) return "in_progress";
+  return "not_started";
+}
+
+function WorkView({ state, onStateChange }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | Task["status"]>("all");
+  const [mode, setMode] = useState<"list" | "board">("board");
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const projectNames = useMemo(() => new Map(state.metrics.projectMetrics.map((project) => [project.id, project.name])), [state.metrics.projectMetrics]);
-  const filtered = useMemo(() => state.data.tasks.filter((task) => (status === "all" || task.status === status) && `${task.title} ${task.owner ?? ""} ${projectNames.get(task.projectId) ?? ""}`.toLowerCase().includes(query.toLowerCase())), [state.data.tasks, status, query, projectNames]);
-  return <div className="page-content"><section className="page-heading"><div><p className="eyebrow">Work intelligence</p><h1>Every task tells part of the delivery story.</h1><p>Filter the worklist to prepare daily follow-ups and unblock the team faster.</p></div></section>
-    <div className="work-filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, or project…" aria-label="Search tasks" /><select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value="all">All statuses</option>{Object.entries(statusLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
-    <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>Status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong>{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? task.projectId}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={task.status} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>
+  const filtered = useMemo(() => state.data.tasks.filter((task) => {
+    const searchable = [task.title, task.owner, task.priority, task.notes, task.workflowStatus, projectNames.get(task.projectId)]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return (status === "all" || task.status === status) && searchable.includes(query.trim().toLowerCase());
+  }), [state.data.tasks, status, query, projectNames]);
+  const boardColumns = useMemo(() => {
+    const knownOrder = ["pending", "to do", "ready to start", "in progress", "ready to test", "in testing", "done"];
+    return [...new Set(state.data.tasks.map((task) => task.workflowStatus ?? statusLabel[task.status]))]
+      .sort((left, right) => {
+        const leftIndex = knownOrder.indexOf(left.toLowerCase());
+        const rightIndex = knownOrder.indexOf(right.toLowerCase());
+        return (leftIndex < 0 ? knownOrder.length : leftIndex) - (rightIndex < 0 ? knownOrder.length : rightIndex) || left.localeCompare(right);
+      });
+  }, [state.data.tasks]);
+
+  const moveTask = async (task: Task, workflowStatus: string) => {
+    if ((task.workflowStatus ?? statusLabel[task.status]) === workflowStatus || syncingTaskId) return;
+    if (state.data.source !== "google_sheets" || !state.data.spreadsheetId || !task.source) {
+      setError("Import this Google Sheet before moving tasks. Demo data is intentionally read-only.");
+      return;
+    }
+    setError(null);
+    setSyncingTaskId(task.id);
+    const optimistic: PortfolioState = {
+      ...state,
+      data: {
+        ...state.data,
+        tasks: state.data.tasks.map((item) => item.id === task.id ? { ...item, workflowStatus, status: workflowToTaskStatus(workflowStatus) } : item)
+      }
+    };
+    onStateChange(optimistic);
+    try {
+      await api.updateTaskStatus({ spreadsheetId: state.data.spreadsheetId, ...task.source, workflowStatus });
+      const refreshed = await api.importSheet(state.data.spreadsheetId);
+      onStateChange(refreshed);
+    } catch (reason) {
+      onStateChange(state);
+      setError(reason instanceof Error ? reason.message : "The status could not be saved to Google Sheets.");
+    } finally {
+      setSyncingTaskId(null);
+      setDraggedTaskId(null);
+    }
+  };
+
+  const onTaskDragStart = (event: DragEvent<HTMLElement>, taskId: string) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", taskId);
+    setDraggedTaskId(taskId);
+  };
+
+  return <div className="page-content">
+    <section className="page-heading"><div><p className="eyebrow">Work intelligence</p><h1>Every task tells part of the delivery story.</h1><p>Search, follow up, and keep the team moving from one task workspace.</p></div></section>
+    <div className="task-toolbar">
+      <div className="work-filters">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, priority, notes, or project…" aria-label="Search tasks" />
+        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} aria-label="Filter by status"><option value="all">All statuses</option>{Object.entries(statusLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+      </div>
+      <div className="view-switch" aria-label="Task view"><button className={mode === "board" ? "active" : ""} onClick={() => setMode("board")}>Board</button><button className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>List</button></div>
+    </div>
+    {error && <div className="error-message task-error"><AlertTriangle size={17} />{error}</div>}
+    {mode === "board" ? <section className="kanban-board">{boardColumns.map((column) => {
+      const tasks = filtered.filter((task) => (task.workflowStatus ?? statusLabel[task.status]) === column);
+      return <div className={`kanban-column ${draggedTaskId ? "drag-active" : ""}`} key={column} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+        event.preventDefault();
+        const taskId = event.dataTransfer.getData("text/plain");
+        const task = state.data.tasks.find((item) => item.id === taskId);
+        if (task) void moveTask(task, column);
+      }}>
+        <header><div><strong>{column}</strong><span>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
+        <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)}>
+          <div className="kanban-card-top"><TaskPill status={task.status} label={task.priority ?? "Normal"} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
+          <h3 dir="auto">{task.title}</h3>{task.notes && <p dir="auto">{task.notes}</p>}
+          <footer><span>{task.owner ?? "Unassigned"}</span>{task.dueDate && <span className={task.dueDate < today && task.status !== "done" ? "text-red" : ""}>{formatShortDate(task.dueDate)}</span>}</footer>
+          <label className="kanban-move">Move to<select value={task.workflowStatus ?? statusLabel[task.status]} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option}>{option}</option>)}</select></label>
+        </article>)}{!tasks.length && <div className="kanban-empty">Drop task here</div>}</div>
+      </div>;
+    })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>Workflow status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={task.status} label={task.workflowStatus} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
   </div>;
 }
 
@@ -226,7 +318,7 @@ function ConnectModal({ session, state, onClose, onSession, onImport }: { sessio
   const importSheet = async (id: string) => { try { setLoading(true); setError(null); onImport(await api.importSheet(id)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to import the spreadsheet."); } finally { setLoading(false); } };
   const disconnect = async () => { try { setLoading(true); await api.disconnect(); onSession({ ...session, connected: false, email: null }); setSheets([]); } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to disconnect."); } finally { setLoading(false); } };
   return <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-labelledby="connect-title"><header><div><p className="eyebrow">Data source</p><h2 id="connect-title">Google Sheets connection</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={20} /></button></header>
-    {!session.googleConfigured ? <div className="connect-empty"><span><Sheet size={26} /></span><h3>One small setup is needed</h3><p>Add Google OAuth credentials as Render environment variables, then use the redirect URL shown in <code>.env.example</code>. No spreadsheet data is sent anywhere except this app.</p><ol><li>Create OAuth Web credentials in Google Cloud.</li><li>Add the Render callback URL to Authorized redirect URIs.</li><li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to Render.</li></ol></div> : !session.connected ? <div className="connect-empty"><span><Sheet size={26} /></span><h3>Connect your Google account</h3><p>Project Pulse requests read-only access to the Google Sheets you choose. It cannot change your source data.</p><a className="button primary full" href="/api/auth/google"><Sheet size={17} />Connect Google Sheets</a></div> : <div className="sheet-picker"><div className="connected-user"><CheckCircle2 size={18} /><span>Connected as <strong>{session.email ?? "Google account"}</strong></span><button onClick={() => void disconnect()} disabled={loading}><Unplug size={15} />Disconnect</button></div><p>Choose a spreadsheet to import. Your current portfolio remains visible until the new data has been read successfully.</p>{error && <div className="error-message"><AlertTriangle size={17} />{error}</div>}<div className="manual-import"><input value={spreadsheetId} onChange={(event) => setSpreadsheetId(event.target.value)} placeholder="Paste a Google Sheets URL or spreadsheet ID" /><button className="button secondary" disabled={loading || spreadsheetId.length < 10} onClick={() => void importSheet(extractSpreadsheetId(spreadsheetId))}>Import</button></div><div className="sheet-list">{loading ? <div className="loading-list"><LoaderCircle className="spin" size={20} />Loading your spreadsheets…</div> : sheets.map((sheet) => <button key={sheet.id} onClick={() => void importSheet(sheet.id ?? "")}><span className="sheet-icon"><Sheet size={19} /></span><span><strong>{sheet.name}</strong><small>Modified {sheet.modifiedTime ? formatDate(sheet.modifiedTime.slice(0, 10)) : "recently"}</small></span><ChevronRight size={18} /></button>)}{!loading && !sheets.length && <EmptyState icon={<Sheet />} title="No spreadsheets found" description="Paste a spreadsheet URL above, or check the Google account you connected." />}</div></div>}
+    {!session.googleConfigured ? <div className="connect-empty"><span><Sheet size={26} /></span><h3>One small setup is needed</h3><p>Add Google OAuth credentials as Render environment variables, then use the redirect URL shown in <code>.env.example</code>. No spreadsheet data is sent anywhere except this app.</p><ol><li>Create OAuth Web credentials in Google Cloud.</li><li>Add the Render callback URL to Authorized redirect URIs.</li><li>Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to Render.</li></ol></div> : !session.connected ? <div className="connect-empty"><span><Sheet size={26} /></span><h3>Connect your Google account</h3><p>Project Pulse reads your Sheet and updates only the workflow-status cell when you move a task.</p><a className="button primary full" href="/api/auth/google"><Sheet size={17} />Connect Google Sheets</a></div> : <div className="sheet-picker"><div className="connected-user"><CheckCircle2 size={18} /><span>Connected as <strong>{session.email ?? "Google account"}</strong></span><button onClick={() => void disconnect()} disabled={loading}><Unplug size={15} />Disconnect</button></div><p>Choose a spreadsheet to import. Your current portfolio remains visible until the new data has been read successfully.</p>{error && <div className="error-message"><AlertTriangle size={17} />{error}</div>}<div className="manual-import"><input value={spreadsheetId} onChange={(event) => setSpreadsheetId(event.target.value)} placeholder="Paste a Google Sheets URL or spreadsheet ID" /><button className="button secondary" disabled={loading || spreadsheetId.length < 10} onClick={() => void importSheet(extractSpreadsheetId(spreadsheetId))}>Import</button></div><div className="sheet-list">{loading ? <div className="loading-list"><LoaderCircle className="spin" size={20} />Loading your spreadsheets…</div> : sheets.map((sheet) => <button key={sheet.id} onClick={() => void importSheet(sheet.id ?? "")}><span className="sheet-icon"><Sheet size={19} /></span><span><strong>{sheet.name}</strong><small>Modified {sheet.modifiedTime ? formatDate(sheet.modifiedTime.slice(0, 10)) : "recently"}</small></span><ChevronRight size={18} /></button>)}{!loading && !sheets.length && <EmptyState icon={<Sheet />} title="No spreadsheets found" description="Paste a spreadsheet URL above, or check the Google account you connected." />}</div></div>}
     {state.data.source === "google_sheets" && <footer><span>Current data: <strong>{state.data.spreadsheetName}</strong></span></footer>}
   </section></div>;
 }
