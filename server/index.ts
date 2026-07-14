@@ -86,8 +86,45 @@ app.post("/api/google/import", async (req, res, next) => {
     const quote = (title: string) => `'${title.replace(/'/g, "''")}'!A:ZZ`;
     const content = await sheets.spreadsheets.values.batchGet({ spreadsheetId: body.spreadsheetId, ranges: titles.map(quote), majorDimension: "ROWS" });
     const rawSheets = (content.data.valueRanges ?? []).map((range, index) => ({ title: titles[index] ?? `Sheet ${index + 1}`, values: (range.values ?? []) as unknown[][] }));
-    const data = parseSheets(rawSheets, metadata.data.properties?.title ?? "Google Sheet");
+    const data = parseSheets(rawSheets, metadata.data.properties?.title ?? "Google Sheet", body.spreadsheetId);
     res.json({ data, metrics: getPortfolioMetrics(data) });
+  } catch (error) { next(error); }
+});
+
+const updateTaskStatusSchema = z.object({
+  spreadsheetId: z.string().min(10).max(200),
+  sheetTitle: z.string().min(1).max(150),
+  rowNumber: z.number().int().min(2).max(200000),
+  statusColumn: z.number().int().min(1).max(702),
+  workflowStatus: z.string().trim().min(1).max(100)
+});
+
+const columnName = (column: number) => {
+  let result = "";
+  let value = column;
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    result = String.fromCharCode(65 + remainder) + result;
+    value = Math.floor((value - 1) / 26);
+  }
+  return result;
+};
+
+app.post("/api/google/task-status", async (req, res, next) => {
+  try {
+    const body = updateTaskStatusSchema.parse(req.body);
+    const auth = await getGoogleClient(req, res);
+    if (!auth) return res.status(401).json({ error: "Reconnect Google Sheets before moving tasks." });
+    const sheets = google.sheets({ version: "v4", auth });
+    const escapedTitle = body.sheetTitle.replace(/'/g, "''");
+    const range = `'${escapedTitle}'!${columnName(body.statusColumn)}${body.rowNumber}`;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: body.spreadsheetId,
+      range,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[body.workflowStatus]] }
+    });
+    res.json({ status: "updated", workflowStatus: body.workflowStatus });
   } catch (error) { next(error); }
 });
 
