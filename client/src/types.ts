@@ -32,11 +32,14 @@ export interface Task {
   effortHours?: number;
   dependency?: string;
   labels?: string[];
+  notes?: string;
+  workflowStatus?: string;
+  source?: { sheetTitle: string; rowNumber: number; statusColumn: number };
 }
 
 export interface Risk { id: string; projectId?: string; title: string; owner?: string; level?: string; status?: string; dueDate?: string }
 export interface Milestone { id: string; projectId: string; title: string; dueDate?: string; status?: string; owner?: string }
-export interface PortfolioData { projects: Project[]; tasks: Task[]; risks: Risk[]; milestones: Milestone[]; source: "sample" | "google_sheets"; importedAt: string; spreadsheetName?: string; mappingNotes: string[] }
+export interface PortfolioData { projects: Project[]; tasks: Task[]; risks: Risk[]; milestones: Milestone[]; source: "sample" | "google_sheets"; importedAt: string; spreadsheetName?: string; spreadsheetId?: string; mappingNotes: string[] }
 export interface ProjectMetrics extends Project { health: Health; progress: number; totalTasks: number; completedTasks: number; inProgressTasks: number; overdueTasks: number; openRisks: number; daysRemaining?: number; costVariance?: number }
 export interface PortfolioMetrics {
   totalProjects: number; onTrackProjects: number; atRiskProjects: number; offTrackProjects: number; completeProjects: number;
