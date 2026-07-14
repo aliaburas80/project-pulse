@@ -12,7 +12,7 @@ const aliases = {
   taskTitle: ["task name", "task", "task title", "summary", "title", "work item"],
   owner: ["owner", "assignee", "responsible", "task owner", "project manager", "pm"],
   sponsor: ["sponsor", "business owner", "executive sponsor"],
-  status: ["status", "state", "phase"],
+  status: ["status dev", "status", "state", "phase"],
   health: ["health", "rag", "project health", "health status"],
   priority: ["priority", "importance"],
   startDate: ["start date", "start", "planned start", "start date planned"],
@@ -33,7 +33,7 @@ const aliases = {
 function normaliseHeader(value: unknown): string {
   return String(value ?? "")
     .toLowerCase()
-    .replace(/[_\-/.]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -99,7 +99,7 @@ function asTaskStatus(value: unknown): TaskStatus {
   if (/done|complete|closed|resolved|finished/.test(text)) return "done";
   if (/block|imped|hold/.test(text)) return "blocked";
   if (/cancel|wont do|won't do/.test(text)) return "cancelled";
-  if (/progress|active|review|testing/.test(text)) return "in_progress";
+  if (/progress|active|review|testing|ready/.test(text)) return "in_progress";
   return "not_started";
 }
 
@@ -109,13 +109,21 @@ function asRiskLevel(value: unknown): Risk["level"] {
   return undefined;
 }
 
-function toRows(values: unknown[][]): Row[] {
+function toRows(values: unknown[][], sheetTitle: string): Row[] {
   const [headerRow, ...records] = values;
   if (!headerRow?.length) return [];
   const headers = headerRow.map(normaliseHeader);
+  const statusHeader = aliases.status.find((candidate) => headers.includes(candidate));
+  const statusColumn = statusHeader ? headers.indexOf(statusHeader) + 1 : undefined;
   return records
-    .filter((record) => record.some((cell) => asText(cell)))
-    .map((record) => Object.fromEntries(headers.map((header, index) => [header, record[index]])));
+    .map((record, index) => ({ record, rowNumber: index + 2 }))
+    .filter(({ record }) => record.some((cell) => asText(cell)))
+    .map(({ record, rowNumber }) => ({
+      ...Object.fromEntries(headers.map((header, index) => [header, record[index]])),
+      __sheetTitle: sheetTitle,
+      __rowNumber: rowNumber,
+      __statusColumn: statusColumn
+    }));
 }
 
 function classifySheet(title: string, rows: Row[]): "projects" | "tasks" | "risks" | "milestones" | "unknown" {
@@ -131,12 +139,12 @@ function classifySheet(title: string, rows: Row[]): "projects" | "tasks" | "risk
 
 const rowKey = (row: Row, field: keyof typeof aliases, fallback: string) => asText(getField(row, field)) ?? fallback;
 
-export function parseSheets(sheets: SheetRows, spreadsheetName?: string): PortfolioData {
+export function parseSheets(sheets: SheetRows, spreadsheetName?: string, spreadsheetId?: string): PortfolioData {
   const buckets = { projects: [] as Row[], tasks: [] as Row[], risks: [] as Row[], milestones: [] as Row[] };
   const notes: string[] = [];
 
   for (const sheet of sheets) {
-    const rows = toRows(sheet.values);
+    const rows = toRows(sheet.values, sheet.title);
     if (!rows.length) continue;
     const kind = classifySheet(sheet.title, rows);
     if (kind === "unknown") {
@@ -167,11 +175,13 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string): Portfo
   const tasks: Task[] = buckets.tasks.map((row, index) => {
     const suppliedProject = asText(getField(row, "projectId"));
     const suppliedProjectName = asText(getField(row, "projectName"));
-    const projectId = suppliedProject ?? (suppliedProjectName ? projectByName.get(suppliedProjectName.toLowerCase()) : undefined) ?? "UNASSIGNED";
+    const projectId = suppliedProject
+      ?? (suppliedProjectName ? projectByName.get(suppliedProjectName.toLowerCase()) : undefined)
+      ?? "IMPORTED_WORK";
     return {
       id: rowKey(row, "taskId", `TASK-${index + 1}`),
       projectId,
-      projectName: suppliedProjectName,
+      projectName: suppliedProjectName ?? spreadsheetName ?? "Imported work",
       title: rowKey(row, "taskTitle", `Untitled task ${index + 1}`),
       owner: asText(getField(row, "owner")),
       status: asTaskStatus(getField(row, "status")),
@@ -182,7 +192,12 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string): Portfo
       progress: asProgress(getField(row, "progress")),
       effortHours: asNumber(getField(row, "effort")),
       dependency: asText(getField(row, "dependency")),
-      labels: asText(getField(row, "labels"))?.split(/[,;|]/).map((label) => label.trim()).filter(Boolean)
+      labels: asText(getField(row, "labels"))?.split(/[,;|]/).map((label) => label.trim()).filter(Boolean),
+      notes: asText(getField(row, "notes")),
+      workflowStatus: asText(getField(row, "status")) ?? "To do",
+      source: typeof row.__sheetTitle === "string" && typeof row.__rowNumber === "number" && typeof row.__statusColumn === "number"
+        ? { sheetTitle: row.__sheetTitle, rowNumber: row.__rowNumber, statusColumn: row.__statusColumn }
+        : undefined
     };
   });
 
@@ -217,7 +232,7 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string): Portfo
   if (!projects.length && tasks.length) notes.push("No Projects sheet was found, so projects were inferred from task project values.");
   if (!projects.length && !tasks.length) notes.push("No usable project data was found. Check that your header row contains names such as Project Name, Task Name, Status, Start Date, and Due Date.");
 
-  return { projects, tasks, risks, milestones, source: "google_sheets", importedAt: new Date().toISOString(), spreadsheetName, mappingNotes: notes };
+  return { projects, tasks, risks, milestones, source: "google_sheets", importedAt: new Date().toISOString(), spreadsheetName, spreadsheetId, mappingNotes: notes };
 }
 
 export function daysBetween(from: string, to: string): number {

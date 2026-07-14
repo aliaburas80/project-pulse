@@ -11,10 +11,10 @@ It is designed for a PM who needs answers quickly:
 
 ## Core capabilities
 
-- Read-only Google OAuth connection to your own Google Sheets.
+- Google OAuth connection to your own Google Sheets, with a Jira-style Kanban board that updates only a task's workflow-status cell when you move it.
 - Smart header matching for common names such as `Project Name`, `Project`, `Task Name`, `Summary`, `Assignee`, `% Complete`, and `Due Date`.
 - Portfolio health derived from project health fields, overdue/blocked work, due-date pressure, and high/critical risks.
-- Project cards, worklist filters, portfolio analytics, attention list, milestone tracking, and responsive Gantt charts.
+- Searchable task viewer, drag-and-drop Kanban board (with a touch-friendly Move to control), project cards, analytics, attention list, milestone tracking, and responsive Gantt charts.
 - Safe demo mode, so the app is useful immediately and your live data is not required for testing.
 - Stateless encrypted session cookies; it does not persist a copy of your Sheet data on the server.
 
@@ -85,7 +85,7 @@ The production server listens on `PORT` (default `3000`) and serves the built Re
 4. Add the deployed Render URL after deployment: `https://YOUR-SERVICE.onrender.com/api/auth/google/callback`.
 5. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_PASSWORD`, and `APP_URL` in `.env` locally or Render Environment variables.
 
-The integration requests only `spreadsheets.readonly`, Drive metadata read-only (to list spreadsheets), and the Google account email used for the connection. It never asks to edit a sheet.
+The integration requests `spreadsheets` access, Drive metadata read-only (to list spreadsheets), and the Google account email used for the connection. Dragging a task changes only the mapped workflow-status cell (for example, `Status (DEV)`) in that spreadsheet. Reconnect Google after upgrading from an older read-only version so it can grant this permission.
 
 ## Deploy on Render
 
@@ -102,7 +102,7 @@ The Blueprint defaults to Render's free plan so it does not assume a paid servic
 ## Architecture
 
 ```text
-Google Sheets → Google OAuth (read-only) → Node/Express API → Smart parser + portfolio metrics → React dashboard
+Google Sheets → Google OAuth → Node/Express API → Smart parser + portfolio metrics → React dashboard + Kanban status updates
 ```
 
 - **Server:** Node.js, Express 5, TypeScript, Google APIs, Zod validation, Helmet, rate limiting.
