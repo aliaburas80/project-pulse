@@ -110,13 +110,21 @@ function asRiskLevel(value: unknown): Risk["level"] {
 }
 
 function toRows(values: unknown[][], sheetTitle: string): Row[] {
-  const [headerRow, ...records] = values;
+  const aliasHeaders = new Set<string>(Object.values(aliases).flat());
+  const headerIndex = values.slice(0, 50)
+    .map((record, index) => ({
+      index,
+      score: record.map(normaliseHeader).filter((header) => aliasHeaders.has(header)).length
+    }))
+    .reduce((best, candidate) => candidate.score > best.score ? candidate : best, { index: 0, score: 0 }).index;
+  const headerRow = values[headerIndex];
+  const records = values.slice(headerIndex + 1);
   if (!headerRow?.length) return [];
   const headers = headerRow.map(normaliseHeader);
   const statusHeader = aliases.status.find((candidate) => headers.includes(candidate));
   const statusColumn = statusHeader ? headers.indexOf(statusHeader) + 1 : undefined;
   return records
-    .map((record, index) => ({ record, rowNumber: index + 2 }))
+    .map((record, index) => ({ record, rowNumber: index + headerIndex + 2 }))
     .filter(({ record }) => record.some((cell) => asText(cell)))
     .map(({ record, rowNumber }) => ({
       ...Object.fromEntries(headers.map((header, index) => [header, record[index]])),
