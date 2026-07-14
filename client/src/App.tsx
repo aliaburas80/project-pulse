@@ -8,10 +8,14 @@ const StatusChart = lazy(() => import("./StatusChart"));
 type View = "dashboard" | "projects" | "gantt" | "work";
 type PortfolioState = { data: PortfolioData; metrics: PortfolioMetrics };
 
-const cacheKey = "project-pulse-portfolio-v1";
+const cacheKey = "project-pulse-portfolio-v2";
 const today = new Date().toISOString().slice(0, 10);
 const healthLabel: Record<Health, string> = { on_track: "On track", at_risk: "At risk", off_track: "Off track", complete: "Complete" };
 const statusLabel: Record<Task["status"], string> = { not_started: "Not started", in_progress: "In progress", blocked: "Blocked", done: "Done", cancelled: "Cancelled" };
+const emptyPortfolio: PortfolioState = {
+  data: { projects: [], tasks: [], risks: [], milestones: [], source: "empty", importedAt: new Date().toISOString(), mappingNotes: [] },
+  metrics: { totalProjects: 0, onTrackProjects: 0, atRiskProjects: 0, offTrackProjects: 0, completeProjects: 0, totalTasks: 0, completedTasks: 0, overdueTasks: 0, blockedTasks: 0, completionRate: 0, projectMetrics: [], taskStatusBreakdown: [], priorityBreakdown: [], upcomingMilestones: [], attentionItems: [] }
+};
 
 function formatDate(date?: string) {
   return date ? new Intl.DateTimeFormat("en", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`)) : "—";
@@ -37,14 +41,14 @@ function App() {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        const [initialSession, demo] = await Promise.all([api.session(), api.demo()]);
+        const initialSession = await api.session();
         setSession(initialSession);
         const cached = window.localStorage.getItem(cacheKey);
         if (cached) {
           const parsed = JSON.parse(cached) as PortfolioState;
           setPortfolio(parsed);
         } else {
-          setPortfolio(demo);
+          setPortfolio(emptyPortfolio);
         }
         const query = new URLSearchParams(window.location.search).get("connection");
         if (query === "success") setNotice("Google Sheets is connected. Choose a spreadsheet to load your portfolio.");
@@ -84,7 +88,7 @@ function App() {
           {navigation.map(({ id, label, icon: Icon }) => <button className={`nav-item ${view === id ? "active" : ""}`} key={id} onClick={() => setView(id)}><Icon size={19} /><span>{label}</span></button>)}
         </nav>
         <div className="sidebar-bottom">
-          <div className="source-summary"><span className={`source-dot ${portfolio.data.source}`} /> <span>{portfolio.data.source === "google_sheets" ? "Live Google Sheet" : "Demo portfolio"}</span></div>
+          <div className="source-summary"><span className={`source-dot ${portfolio.data.source}`} /> <span>{portfolio.data.source === "google_sheets" ? "Live Google Sheet" : "No sheet loaded"}</span></div>
           <button className="help-card" onClick={() => setShowConnect(true)}><Sheet size={19} /><span><strong>Connect your data</strong><small>Read your Google Sheets</small></span><ChevronRight size={16} /></button>
         </div>
       </aside>
@@ -104,7 +108,7 @@ function App() {
         {view === "dashboard" && <Dashboard state={portfolio} onOpenConnect={() => setShowConnect(true)} onViewProjects={() => setView("projects")} />}
         {view === "projects" && <ProjectsView state={portfolio} onSelectGantt={() => setView("gantt")} />}
         {view === "gantt" && <GanttView state={portfolio} />}
-        {view === "work" && <WorkView state={portfolio} onStateChange={persistPortfolio} />}
+        {view === "work" && <WorkView state={portfolio} onStateChange={persistPortfolio} onOpenConnect={() => setShowConnect(true)} />}
       </main>
 
       {showConnect && <ConnectModal session={session} state={portfolio} onClose={() => setShowConnect(false)} onSession={setSession} onImport={(next) => { updatePortfolio(next); setShowConnect(false); }} />}
@@ -126,9 +130,9 @@ function MobileNav({ items, active, onSelect }: { items: { id: View; label: stri
 
 function Dashboard({ state, onOpenConnect, onViewProjects }: { state: PortfolioState; onOpenConnect: () => void; onViewProjects: () => void }) {
   const { data, metrics } = state;
+  if (data.source === "empty") return <EmptyPortfolioState onOpenConnect={onOpenConnect} />;
   return <div className="page-content">
     <section className="page-heading"><div><p className="eyebrow">Portfolio health</p><h1>Know where to focus today.</h1><p>One view of delivery progress, blockers, risks, milestones, and schedule health.</p></div><button className="button secondary" onClick={onOpenConnect}><RefreshCw size={16} />Refresh data</button></section>
-    {data.source === "sample" && <div className="demo-banner"><Sparkles size={19} /><span><strong>Demo mode.</strong> Your dashboard is ready—connect your Google Sheet when you are ready to see live data.</span><button onClick={onOpenConnect}>Connect now</button></div>}
     <section className="metric-grid">
       <MetricCard icon={<FolderKanban />} label="Portfolio health" value={`${metrics.onTrackProjects}/${metrics.totalProjects}`} help="projects on track" trend={metrics.atRiskProjects ? `${metrics.atRiskProjects} at risk` : "All projects healthy"} tone={metrics.atRiskProjects ? "amber" : "green"} />
       <MetricCard icon={<Target />} label="Task completion" value={`${metrics.completionRate}%`} help={`${metrics.completedTasks} of ${metrics.totalTasks} tasks completed`} trend={`${metrics.totalTasks - metrics.completedTasks} still open`} tone="blue" />
@@ -171,6 +175,13 @@ function MilestoneList({ items, projects }: { items: PortfolioMetrics["upcomingM
 }
 
 function EmptyState({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) { return <div className="empty-state"><span>{icon}</span><strong>{title}</strong><p>{description}</p></div>; }
+
+function EmptyPortfolioState({ onOpenConnect }: { onOpenConnect: () => void }) {
+  return <div className="page-content empty-portfolio-page">
+    <section className="page-heading"><div><p className="eyebrow">Your workspace</p><h1>Start with your real project data.</h1><p>No sample tasks are shown. Import a Google Sheet when you are ready.</p></div></section>
+    <section className="empty-import panel"><span><Sheet size={29} /></span><div><h2>Paste your Google Sheet link</h2><p>Choose <strong>Connect Google Sheets</strong>, approve access, then paste your Sheet URL and select <strong>Import</strong>. Project Pulse reads the selected worksheet and keeps your Sheet as the source of truth.</p><button className="button primary" onClick={onOpenConnect}><Sheet size={17} />Connect Google Sheets</button></div></section>
+  </div>;
+}
 
 function ProjectsView({ state, onSelectGantt }: { state: PortfolioState; onSelectGantt: () => void }) {
   const { metrics } = state;
@@ -219,7 +230,7 @@ function workflowToTaskStatus(workflowStatus: string): Task["status"] {
   return "not_started";
 }
 
-function WorkView({ state, onStateChange }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void }) {
+function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void; onOpenConnect: () => void }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | Task["status"]>("all");
   const [mode, setMode] = useState<"list" | "board">("board");
@@ -244,10 +255,12 @@ function WorkView({ state, onStateChange }: { state: PortfolioState; onStateChan
       });
   }, [state.data.tasks]);
 
+  if (state.data.source === "empty") return <EmptyPortfolioState onOpenConnect={onOpenConnect} />;
+
   const moveTask = async (task: Task, workflowStatus: string) => {
     if ((task.workflowStatus ?? statusLabel[task.status]) === workflowStatus || syncingTaskId) return;
     if (state.data.source !== "google_sheets" || !state.data.spreadsheetId || !task.source) {
-      setError("Import this Google Sheet before moving tasks. Demo data is intentionally read-only.");
+      setError("Connect and import a Google Sheet before moving tasks.");
       return;
     }
     setError(null);
