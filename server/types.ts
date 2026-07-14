@@ -33,6 +33,13 @@ export interface Task {
   dependency?: string;
   labels?: string[];
   isMilestone?: boolean;
+  notes?: string;
+  workflowStatus?: string;
+  source?: {
+    sheetTitle: string;
+    rowNumber: number;
+    statusColumn: number;
+  };
 }
 
 export interface Risk {
@@ -62,6 +69,7 @@ export interface PortfolioData {
   source: "sample" | "google_sheets";
   importedAt: string;
   spreadsheetName?: string;
+  spreadsheetId?: string;
   mappingNotes: string[];
 }
 
