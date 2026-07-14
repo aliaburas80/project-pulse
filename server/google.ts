@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { session } from "./session.js";
 
 const scopes = [
-  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
   "https://www.googleapis.com/auth/userinfo.email"
 ];
