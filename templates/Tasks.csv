@@ -1,0 +1,2 @@
+Task ID,Project ID,Task Name,Owner,Status,Priority,Start Date,Due Date,Progress,Effort Hours,Dependency,Labels
+TASK-001,PRJ-001,Confirm delivery roadmap,Ali Abu Ras,In Progress,High,2026-07-01,2026-07-18,60%,16,,Planning; Governance
