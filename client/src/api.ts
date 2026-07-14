@@ -19,7 +19,6 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   session: () => request<Session>("/api/session"),
-  demo: () => request<{ data: PortfolioData; metrics: PortfolioMetrics }>("/api/demo"),
   sheets: () => request<{ files: SheetFile[] }>("/api/google/spreadsheets"),
   importSheet: (spreadsheetId: string) => request<{ data: PortfolioData; metrics: PortfolioMetrics }>("/api/google/import", { method: "POST", body: JSON.stringify({ spreadsheetId }) }),
   updateTaskStatus: (update: TaskStatusUpdate) => request<{ status: "updated"; workflowStatus: string }>("/api/google/task-status", { method: "POST", body: JSON.stringify(update) }),

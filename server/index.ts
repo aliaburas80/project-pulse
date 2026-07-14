@@ -8,7 +8,6 @@ import { google } from "googleapis";
 import { z } from "zod";
 import { beginGoogleAuthorization, disconnectGoogle, finishGoogleAuthorization, getGoogleClient, googleIsConfigured } from "./google.js";
 import { getPortfolioMetrics, parseSheets } from "./portfolio.js";
-import { samplePortfolio } from "./sample-data.js";
 import { session, sessionIsSafe } from "./session.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,8 +31,6 @@ app.get("/api/session", async (req, res, next) => {
     res.json({ googleConfigured: googleIsConfigured(), connected: Boolean(currentSession.googleTokens), email: currentSession.googleEmail ?? null });
   } catch (error) { next(error); }
 });
-
-app.get("/api/demo", (_req, res) => res.json({ data: samplePortfolio, metrics: getPortfolioMetrics(samplePortfolio) }));
 
 app.get("/api/auth/google", async (req, res, next) => {
   try {

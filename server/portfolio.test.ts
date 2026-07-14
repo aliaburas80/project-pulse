@@ -23,14 +23,14 @@ test("surfaces blocked tasks in the health and attention metrics", () => {
   assert.equal(metrics.attentionItems[0].type, "blocked");
 });
 
-test("maps the Table1 task layout and keeps the Status (DEV) cell reference", () => {
+test("maps the Sheet1 task layout and keeps the Status (DEV) cell reference", () => {
   const data = parseSheets([
-    { title: "Table1", values: [["Notes", "Status (DEV)", "Start date", "Status", "Owner", "Priority", "Task"], ["See attachment", "Ready to Test", "14/07/2026", "", "Ragheb & Yarob", "High", "مراجعة واجهة الدخول"]] }
+    { title: "Sheet1", values: [[], [], ["Task", "Priority", "Owner", "Status", "Start date", "Status (DEV)", "Notes"], ["مراجعة واجهة الدخول", "High", "Ragheb & Yarob", "", "14/07/2026", "Ready to Test", "See attachment"]] }
   ], "Khidmet Alalam work");
 
   assert.equal(data.tasks[0].title, "مراجعة واجهة الدخول");
   assert.equal(data.tasks[0].workflowStatus, "Ready to Test");
   assert.equal(data.tasks[0].status, "in_progress");
-  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Table1", rowNumber: 2, statusColumn: 2 });
+  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Sheet1", rowNumber: 4, statusColumn: 6 });
   assert.equal(data.projects[0].name, "Khidmet Alalam work");
 });

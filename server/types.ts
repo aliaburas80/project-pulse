@@ -66,7 +66,7 @@ export interface PortfolioData {
   tasks: Task[];
   risks: Risk[];
   milestones: Milestone[];
-  source: "sample" | "google_sheets";
+  source: "empty" | "google_sheets";
   importedAt: string;
   spreadsheetName?: string;
   spreadsheetId?: string;

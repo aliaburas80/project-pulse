@@ -15,7 +15,7 @@ It is designed for a PM who needs answers quickly:
 - Smart header matching for common names such as `Project Name`, `Project`, `Task Name`, `Summary`, `Assignee`, `% Complete`, and `Due Date`.
 - Portfolio health derived from project health fields, overdue/blocked work, due-date pressure, and high/critical risks.
 - Searchable task viewer, drag-and-drop Kanban board (with a touch-friendly Move to control), project cards, analytics, attention list, milestone tracking, and responsive Gantt charts.
-- Safe demo mode, so the app is useful immediately and your live data is not required for testing.
+- Clean empty state until you connect and import a Google Sheet; the app never displays sample tasks as your work.
 - Stateless encrypted session cookies; it does not persist a copy of your Sheet data on the server.
 
 ## Recommended Google Sheet structure
