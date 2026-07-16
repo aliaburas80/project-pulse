@@ -1,11 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type DragEvent } from "react";
-import { AlertTriangle, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Clipboard, Clock3, ExternalLink, FolderKanban, LayoutDashboard, ListTodo, LoaderCircle, Menu, MoreHorizontal, RefreshCw, ShieldAlert, Sheet, Sparkles, Target, Unplug, X } from "lucide-react";
+import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Clipboard, Clock3, ExternalLink, FolderKanban, LayoutDashboard, ListTodo, LoaderCircle, Menu, MoreHorizontal, RefreshCw, ShieldAlert, Sheet, Sparkles, Target, Unplug, X } from "lucide-react";
 import { api } from "./api";
 import type { Health, PortfolioData, PortfolioMetrics, ProjectMetrics, Session, SheetFile, Task } from "./types";
 
 const StatusChart = lazy(() => import("./StatusChart"));
 
-type View = "dashboard" | "projects" | "gantt" | "work";
+type View = "dashboard" | "projects" | "gantt" | "work" | "reports";
 type PortfolioState = { data: PortfolioData; metrics: PortfolioMetrics };
 
 const cacheKey = "project-pulse-portfolio-v2";
@@ -13,7 +13,7 @@ const today = new Date().toISOString().slice(0, 10);
 const healthLabel: Record<Health, string> = { on_track: "On track", at_risk: "At risk", off_track: "Off track", complete: "Complete" };
 const statusLabel: Record<Task["status"], string> = { not_started: "Not started", in_progress: "In progress", blocked: "Blocked", done: "Done", cancelled: "Cancelled" };
 const emptyPortfolio: PortfolioState = {
-  data: { projects: [], tasks: [], risks: [], milestones: [], source: "empty", importedAt: new Date().toISOString(), mappingNotes: [] },
+  data: { projects: [], tasks: [], risks: [], milestones: [], activityEvents: [], activityTracking: false, source: "empty", importedAt: new Date().toISOString(), mappingNotes: [] },
   metrics: { totalProjects: 0, onTrackProjects: 0, atRiskProjects: 0, offTrackProjects: 0, completeProjects: 0, totalTasks: 0, completedTasks: 0, overdueTasks: 0, blockedTasks: 0, completionRate: 0, projectMetrics: [], taskStatusBreakdown: [], priorityBreakdown: [], upcomingMilestones: [], attentionItems: [] }
 };
 
@@ -71,13 +71,34 @@ function App() {
     window.localStorage.setItem(cacheKey, JSON.stringify(next));
   };
 
+  const enableActivityTracking = async () => {
+    if (!portfolio?.data.spreadsheetId) {
+      setNotice("Import a Google Sheet before enabling progress history.");
+      return;
+    }
+    if (!session?.connected) {
+      setNotice("Connect Google Sheets again to enable progress history.");
+      setShowConnect(true);
+      return;
+    }
+    try {
+      await api.startActivityTracking(portfolio.data.spreadsheetId);
+      const refreshed = await api.importSheet(portfolio.data.spreadsheetId);
+      persistPortfolio(refreshed);
+      setNotice("Progress history is on. Future task status changes will be logged in a separate Project Pulse Activity tab.");
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : "Could not enable progress history.");
+    }
+  };
+
   if (!portfolio || !session) return <LoadingScreen />;
 
   const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
     { id: "dashboard", label: "Portfolio", icon: LayoutDashboard },
     { id: "projects", label: "Projects", icon: FolderKanban },
     { id: "gantt", label: "Gantt", icon: CalendarDays },
-    { id: "work", label: "Work", icon: ListTodo }
+    { id: "work", label: "Work", icon: ListTodo },
+    { id: "reports", label: "Reports", icon: BarChart3 }
   ];
 
   return (
@@ -109,6 +130,7 @@ function App() {
         {view === "projects" && <ProjectsView state={portfolio} onSelectGantt={() => setView("gantt")} />}
         {view === "gantt" && <GanttView state={portfolio} />}
         {view === "work" && <WorkView state={portfolio} onStateChange={persistPortfolio} onOpenConnect={() => setShowConnect(true)} />}
+        {view === "reports" && <ReportsView state={portfolio} onOpenConnect={() => setShowConnect(true)} onEnableTracking={() => void enableActivityTracking()} />}
       </main>
 
       {showConnect && <ConnectModal session={session} state={portfolio} onClose={() => setShowConnect(false)} onSession={setSession} onImport={(next) => { updatePortfolio(next); setShowConnect(false); }} />}
@@ -219,6 +241,83 @@ function GanttView({ state }: { state: PortfolioState }) {
 
 function GanttRow({ task, startColumn, span, weeks }: { task: Task; startColumn: number; span: number; weeks: number }) {
   return <><div className="gantt-task"><strong>{task.title}</strong><small>{task.owner ?? "Unassigned"} · {formatShortDate(task.startDate)} — {formatShortDate(task.dueDate)}</small></div>{Array.from({ length: weeks }, (_, index) => <div className="gantt-cell" key={index} />)}<div className={`gantt-bar ${task.status}`} style={{ gridColumn: `${startColumn} / span ${span}` }} title={`${task.title}: ${statusLabel[task.status]}`}><span>{task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)}%</span></div></>;
+}
+
+function isCompletedStatus(status?: string) {
+  return /done|complete|closed|resolved|finished/.test(status?.toLowerCase() ?? "");
+}
+
+function isReadyForTest(status?: string) {
+  return /ready.*test|qa ready|testing|review/.test(status?.toLowerCase() ?? "");
+}
+
+function isInDevelopment(status?: string) {
+  return Boolean(status?.trim()) && !isCompletedStatus(status) && !isReadyForTest(status) && !/cancel|block|hold/.test(status?.toLowerCase() ?? "");
+}
+
+function localDayKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function ReportsView({ state, onOpenConnect, onEnableTracking }: { state: PortfolioState; onOpenConnect: () => void; onEnableTracking: () => void }) {
+  const { data, metrics } = state;
+  if (data.source === "empty") return <EmptyPortfolioState onOpenConnect={onOpenConnect} />;
+
+  const tasks = data.tasks;
+  const completed = tasks.filter((task) => isCompletedStatus(task.deliveryStatus) || task.status === "done").length;
+  const readyForTest = tasks.filter((task) => isReadyForTest(task.developmentStatus)).length;
+  const underDevelopment = tasks.filter((task) => isInDevelopment(task.developmentStatus)).length;
+  const unstarted = tasks.filter((task) => !task.developmentStatus?.trim() && !task.deliveryStatus?.trim()).length;
+  const completion = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+  const activity = (data.activityEvents ?? []).filter((event) => !Number.isNaN(Date.parse(event.timestamp)));
+  const daySeries = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    const key = localDayKey(date);
+    return { key, label: new Intl.DateTimeFormat("en", { weekday: "short" }).format(date), count: activity.filter((event) => localDayKey(new Date(event.timestamp)) === key).length };
+  });
+  const hourSeries = Array.from({ length: 8 }, (_, index) => {
+    const date = new Date();
+    date.setMinutes(0, 0, 0);
+    date.setHours(date.getHours() - (7 - index));
+    return {
+      key: `${localDayKey(date)}-${date.getHours()}`,
+      label: new Intl.DateTimeFormat("en", { hour: "numeric" }).format(date),
+      count: activity.filter((event) => {
+        const eventDate = new Date(event.timestamp);
+        return localDayKey(eventDate) === localDayKey(date) && eventDate.getHours() === date.getHours();
+      }).length
+    };
+  });
+  const maxDaily = Math.max(1, ...daySeries.map((item) => item.count));
+  const maxHourly = Math.max(1, ...hourSeries.map((item) => item.count));
+  const recentActivity = [...activity].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp)).slice(0, 6);
+
+  return <div className="page-content report-room">
+    <section className="report-hero">
+      <div><p className="eyebrow">Progress signal</p><h1>See what moved, not just what exists.</h1><p>Live task progress from {data.spreadsheetName ?? "your Google Sheet"}, with a clear current snapshot and a history of status changes.</p></div>
+      <div className="report-completion"><span>Delivery progress</span><strong>{completion}%</strong><small>{completed} passed of {tasks.length} tasks</small><div><i style={{ width: `${completion}%` }} /></div></div>
+    </section>
+
+    <section className="report-status-grid">
+      <article className="report-status-card complete"><span><CheckCircle2 size={18} /></span><div><small>Passed / completed</small><strong>{completed}</strong><p>Tasks marked completed in delivery status.</p></div></article>
+      <article className="report-status-card active"><span><Clock3 size={18} /></span><div><small>Under development</small><strong>{underDevelopment}</strong><p>Active DEV work, excluding testing and finished tasks.</p></div></article>
+      <article className="report-status-card testing"><span><Sparkles size={18} /></span><div><small>Ready for test</small><strong>{readyForTest}</strong><p>Tasks currently waiting for QA or review.</p></div></article>
+      <article className="report-status-card open"><span><ListTodo size={18} /></span><div><small>Open delivery work</small><strong>{Math.max(0, tasks.length - completed)}</strong><p>{unstarted ? `${unstarted} have no workflow status yet.` : "Every task has a workflow signal."}</p></div></article>
+    </section>
+
+    <section className="report-layout">
+      <article className="report-panel report-trend"><header><div><p className="eyebrow">Daily movement</p><h2>Status changes over the last 7 days</h2></div><span>{activity.length} total events</span></header>{data.activityTracking ? <div className="report-bars daily-bars">{daySeries.map((item) => <div key={item.key}><span>{item.count}</span><i style={{ height: `${Math.max(item.count ? 16 : 3, (item.count / maxDaily) * 100)}%` }} /><small>{item.label}</small></div>)}</div> : <HistoryEmpty onEnableTracking={onEnableTracking} />}</article>
+      <article className="report-panel report-hourly"><header><div><p className="eyebrow">Hourly pulse</p><h2>Last eight hours</h2></div><Clock3 size={19} /></header>{data.activityTracking ? <div className="report-bars hourly-bars">{hourSeries.map((item) => <div key={item.key}><span>{item.count}</span><i style={{ height: `${Math.max(item.count ? 16 : 3, (item.count / maxHourly) * 100)}%` }} /><small>{item.label}</small></div>)}</div> : <HistoryEmpty onEnableTracking={onEnableTracking} compact />}</article>
+      <article className="report-panel report-health"><header><div><p className="eyebrow">Workload</p><h2>Current delivery mix</h2></div></header><div className="report-mix"><div><span>Completed</span><strong>{completed}</strong><i className="mix-complete" style={{ width: `${tasks.length ? (completed / tasks.length) * 100 : 0}%` }} /></div><div><span>In development</span><strong>{underDevelopment}</strong><i className="mix-active" style={{ width: `${tasks.length ? (underDevelopment / tasks.length) * 100 : 0}%` }} /></div><div><span>Ready for test</span><strong>{readyForTest}</strong><i className="mix-test" style={{ width: `${tasks.length ? (readyForTest / tasks.length) * 100 : 0}%` }} /></div><div><span>Blocked</span><strong>{metrics.blockedTasks}</strong><i className="mix-blocked" style={{ width: `${tasks.length ? (metrics.blockedTasks / tasks.length) * 100 : 0}%` }} /></div></div></article>
+      <article className="report-panel report-activity"><header><div><p className="eyebrow">Activity feed</p><h2>Latest status changes</h2></div>{data.activityTracking && <span className="tracking-chip"><i />Tracking</span>}</header>{data.activityTracking && recentActivity.length ? <ol className="activity-feed">{recentActivity.map((event, index) => <li key={`${event.timestamp}-${event.taskId ?? event.taskTitle}-${index}`}><span className="activity-dot" /><div><strong dir="auto">{event.taskTitle}</strong><p>{event.fromStatus ?? "Not set"} <b>→</b> {event.toStatus}</p><small>{event.statusField} · {new Intl.DateTimeFormat("en", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(new Date(event.timestamp))}</small></div></li>)}</ol> : <HistoryEmpty onEnableTracking={onEnableTracking} message={data.activityTracking ? "No status changes have been recorded yet. Move a task from Work to start building this feed." : undefined} />}</article>
+    </section>
+  </div>;
+}
+
+function HistoryEmpty({ onEnableTracking, compact = false, message }: { onEnableTracking: () => void; compact?: boolean; message?: string }) {
+  return <div className={`history-empty ${compact ? "compact" : ""}`}><span><BarChart3 size={20} /></span><div><strong>{message ? "History is waiting" : "Turn on progress history"}</strong><p>{message ?? "Create a separate Project Pulse Activity tab. Future task moves will populate daily and hourly reports."}</p>{!message && <button className="button primary" onClick={onEnableTracking}>Start tracking</button>}</div></div>;
 }
 
 function workflowToTaskStatus(workflowStatus: string): Task["status"] {
@@ -349,6 +448,22 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
     onStateChange(optimistic);
     try {
       await api.updateTaskStatus({ spreadsheetId: state.data.spreadsheetId, sheetTitle: task.source.sheetTitle, rowNumber: task.source.rowNumber, statusColumn, workflowStatus });
+      if (state.data.activityTracking) {
+        try {
+          await api.recordActivity({
+            spreadsheetId: state.data.spreadsheetId,
+            taskId: task.id,
+            taskTitle: task.title,
+            owner: task.owner,
+            statusField: boardStatusLabel[activeBoardField],
+            fromStatus: taskWorkflowStatus(task, activeBoardField),
+            toStatus: workflowStatus,
+            sourceSheet: task.source.sheetTitle
+          });
+        } catch (reason) {
+          setError(reason instanceof Error ? `Task status was saved, but progress history was not: ${reason.message}` : "Task status was saved, but progress history was not recorded.");
+        }
+      }
       const refreshed = await api.importSheet(state.data.spreadsheetId);
       onStateChange(refreshed);
       return true;

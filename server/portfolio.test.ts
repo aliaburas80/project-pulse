@@ -48,3 +48,15 @@ test("keeps development and delivery statuses separate for a task table", () => 
   assert.equal(data.tasks[0].status, "done");
   assert.deepEqual(data.tasks[0].source, { sheetTitle: "النواقص", rowNumber: 2, developmentStatusColumn: 7, deliveryStatusColumn: 5 });
 });
+
+test("reads Project Pulse activity without treating it as a task table", () => {
+  const data = parseSheets([
+    { title: "Sheet1", values: [["Task", "Status"], ["واجهة الدخول", "Pending"]] },
+    { title: "Project Pulse Activity", values: [["Event Timestamp", "Task ID", "Task", "Owner", "Status Field", "From Status", "To Status", "Source Sheet"], ["2026-07-16T09:30:00.000Z", "TASK-1", "واجهة الدخول", "Ragheb & Yarob", "Status (DEV)", "Pending", "Ready to test", "Sheet1"]] }
+  ]);
+
+  assert.equal(data.activityTracking, true);
+  assert.equal(data.activityEvents.length, 1);
+  assert.equal(data.activityEvents[0].toStatus, "Ready to test");
+  assert.equal(data.tasks.length, 1);
+});

@@ -1,4 +1,4 @@
-import type { Health, Milestone, PortfolioData, PortfolioMetrics, Project, ProjectMetrics, Risk, Task, TaskStatus } from "./types.js";
+import type { ActivityEvent, Health, Milestone, PortfolioData, PortfolioMetrics, Project, ProjectMetrics, Risk, Task, TaskStatus } from "./types.js";
 
 type SheetRows = { title: string; values: unknown[][] }[];
 type Row = Record<string, unknown>;
@@ -27,7 +27,12 @@ const aliases = {
   labels: ["labels", "tags", "category", "categories"],
   riskLevel: ["risk level", "level", "severity", "impact"],
   riskTitle: ["risk", "risk title", "title", "description"],
-  milestone: ["milestone", "milestone name", "title", "name"]
+  milestone: ["milestone", "milestone name", "title", "name"],
+  eventTimestamp: ["event timestamp", "timestamp", "recorded at"],
+  statusField: ["status field", "workflow field"],
+  fromStatus: ["from status", "previous status"],
+  toStatus: ["to status", "new status"],
+  sourceSheet: ["source sheet", "sheet"]
 } as const;
 
 function normaliseHeader(value: unknown): string {
@@ -135,10 +140,11 @@ function toRows(values: unknown[][], sheetTitle: string): Row[] {
     }));
 }
 
-function classifySheet(title: string, rows: Row[]): "projects" | "tasks" | "risks" | "milestones" | "unknown" {
+function classifySheet(title: string, rows: Row[]): "projects" | "tasks" | "risks" | "milestones" | "activity" | "unknown" {
   const normalizedTitle = normaliseHeader(title);
   const sampleHeaders = Object.keys(rows[0] ?? {});
   const has = (...names: string[]) => names.some((name) => sampleHeaders.includes(name));
+  if (/project pulse activity/.test(normalizedTitle) || has("event timestamp", "from status", "to status")) return "activity";
   if (/risk|raid/.test(normalizedTitle) || has("risk level", "severity")) return "risks";
   if (/milestone|deliverable/.test(normalizedTitle)) return "milestones";
   if (/task|work item|issues|backlog|activities/.test(normalizedTitle) || has("task name", "task", "assignee", "issue key")) return "tasks";
@@ -149,15 +155,17 @@ function classifySheet(title: string, rows: Row[]): "projects" | "tasks" | "risk
 const rowKey = (row: Row, field: keyof typeof aliases, fallback: string) => asText(getField(row, field)) ?? fallback;
 
 export function parseSheets(sheets: SheetRows, spreadsheetName?: string, spreadsheetId?: string): PortfolioData {
-  const buckets = { projects: [] as Row[], tasks: [] as Row[], risks: [] as Row[], milestones: [] as Row[] };
+  const buckets = { projects: [] as Row[], tasks: [] as Row[], risks: [] as Row[], milestones: [] as Row[], activity: [] as Row[] };
   const notes: string[] = [];
+  let activityTracking = false;
 
   for (const sheet of sheets) {
+    if (/project pulse activity/.test(normaliseHeader(sheet.title))) activityTracking = true;
     const rows = toRows(sheet.values, sheet.title);
     if (!rows.length) continue;
     const kind = classifySheet(sheet.title, rows);
     if (kind === "unknown") {
-      notes.push(`Skipped “${sheet.title}” because its columns do not match Projects, Tasks, Risks, or Milestones.`);
+      notes.push(`Skipped “${sheet.title}” because its columns do not match Projects, Tasks, Risks, Milestones, or activity.`);
     } else {
       buckets[kind].push(...rows);
       notes.push(`Read ${rows.length} row${rows.length === 1 ? "" : "s"} from “${sheet.title}” as ${kind}.`);
@@ -249,10 +257,29 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string, spreads
     owner: asText(getField(row, "owner"))
   }));
 
+  const activityEvents: ActivityEvent[] = buckets.activity
+    .map((row): ActivityEvent | undefined => {
+      const timestamp = asText(getField(row, "eventTimestamp"));
+      const taskTitle = asText(getField(row, "taskTitle"));
+      const toStatus = asText(getField(row, "toStatus"));
+      if (!timestamp || !taskTitle || !toStatus) return undefined;
+      return {
+        timestamp,
+        taskId: asText(getField(row, "taskId")),
+        taskTitle,
+        owner: asText(getField(row, "owner")),
+        statusField: asText(getField(row, "statusField")) ?? "Status",
+        fromStatus: asText(getField(row, "fromStatus")),
+        toStatus,
+        sourceSheet: asText(getField(row, "sourceSheet"))
+      };
+    })
+    .filter((event): event is ActivityEvent => Boolean(event));
+
   if (!projects.length && tasks.length) notes.push("No Projects sheet was found, so projects were inferred from task project values.");
   if (!projects.length && !tasks.length) notes.push("No usable project data was found. Check that your header row contains names such as Project Name, Task Name, Status, Start Date, and Due Date.");
 
-  return { projects, tasks, risks, milestones, source: "google_sheets", importedAt: new Date().toISOString(), spreadsheetName, spreadsheetId, mappingNotes: notes };
+  return { projects, tasks, risks, milestones, activityEvents, activityTracking, source: "google_sheets", importedAt: new Date().toISOString(), spreadsheetName, spreadsheetId, mappingNotes: notes };
 }
 
 export function daysBetween(from: string, to: string): number {

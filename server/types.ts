@@ -65,11 +65,24 @@ export interface Milestone {
   owner?: string;
 }
 
+export interface ActivityEvent {
+  timestamp: string;
+  taskId?: string;
+  taskTitle: string;
+  owner?: string;
+  statusField: string;
+  fromStatus?: string;
+  toStatus: string;
+  sourceSheet?: string;
+}
+
 export interface PortfolioData {
   projects: Project[];
   tasks: Task[];
   risks: Risk[];
   milestones: Milestone[];
+  activityEvents: ActivityEvent[];
+  activityTracking: boolean;
   source: "empty" | "google_sheets";
   importedAt: string;
   spreadsheetName?: string;
