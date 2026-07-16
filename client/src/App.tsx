@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type DragEvent } from "react";
-import { AlertTriangle, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Clock3, FolderKanban, LayoutDashboard, ListTodo, LoaderCircle, Menu, MoreHorizontal, RefreshCw, ShieldAlert, Sheet, Sparkles, Target, Unplug, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Clipboard, Clock3, ExternalLink, FolderKanban, LayoutDashboard, ListTodo, LoaderCircle, Menu, MoreHorizontal, RefreshCw, ShieldAlert, Sheet, Sparkles, Target, Unplug, X } from "lucide-react";
 import { api } from "./api";
 import type { Health, PortfolioData, PortfolioMetrics, ProjectMetrics, Session, SheetFile, Task } from "./types";
 
@@ -270,11 +270,21 @@ function workflowColumnOrder(status: string) {
   return 80;
 }
 
+function workflowColumnTone(status: string) {
+  const value = status.toLowerCase();
+  if (/done|complete|closed|resolved|finished/.test(value)) return "complete";
+  if (/ready.*test|testing|qa|review/.test(value)) return "test";
+  if (/progress|development|developing|active/.test(value)) return "active";
+  if (/pending|backlog|not started/.test(value)) return "pending";
+  return "neutral";
+}
+
 function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void; onOpenConnect: () => void }) {
   const [query, setQuery] = useState("");
   const [boardField, setBoardField] = useState<BoardStatusField>("development");
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [mode, setMode] = useState<"list" | "board">("board");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -296,16 +306,17 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
         return workflowColumnOrder(left) - workflowColumnOrder(right) || left.localeCompare(right);
       });
   }, [state.data.tasks, activeBoardField]);
+  const selectedTask = selectedTaskId ? state.data.tasks.find((task) => task.id === selectedTaskId) ?? null : null;
 
   if (state.data.source === "empty") return <EmptyPortfolioState onOpenConnect={onOpenConnect} />;
 
-  const moveTask = async (task: Task, workflowStatus: string) => {
+  const moveTask = async (task: Task, workflowStatus: string): Promise<boolean> => {
     const statusColumn = statusColumnFor(task, activeBoardField);
-    if (taskWorkflowStatus(task, activeBoardField) === workflowStatus || syncingTaskId) return;
-    if (workflowStatus === "Not set") return;
+    if (taskWorkflowStatus(task, activeBoardField) === workflowStatus || syncingTaskId) return false;
+    if (workflowStatus === "Not set") return false;
     if (state.data.source !== "google_sheets" || !state.data.spreadsheetId || !task.source || !statusColumn) {
       setError("Connect and import a Google Sheet before moving tasks.");
-      return;
+      return false;
     }
     setError(null);
     setSyncingTaskId(task.id);
@@ -327,9 +338,11 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
       await api.updateTaskStatus({ spreadsheetId: state.data.spreadsheetId, sheetTitle: task.source.sheetTitle, rowNumber: task.source.rowNumber, statusColumn, workflowStatus });
       const refreshed = await api.importSheet(state.data.spreadsheetId);
       onStateChange(refreshed);
+      return true;
     } catch (reason) {
       onStateChange(state);
       setError(reason instanceof Error ? reason.message : "The status could not be saved to Google Sheets.");
+      return false;
     } finally {
       setSyncingTaskId(null);
       setDraggedTaskId(null);
@@ -342,8 +355,8 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
     setDraggedTaskId(taskId);
   };
 
-  return <div className="page-content">
-    <section className="page-heading"><div><p className="eyebrow">Work intelligence</p><h1>Every task tells part of the delivery story.</h1><p>Search, follow up, and keep the team moving from one task workspace.</p></div></section>
+  return <div className="page-content delivery-desk">
+    <section className="page-heading"><div><p className="eyebrow">Delivery desk</p><h1>What needs movement today.</h1><p>Open a work card for the full brief, then move it only when the next step is clear.</p></div></section>
     <div className="task-toolbar">
       <div className="work-filters">
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, priority, notes, or project…" aria-label="Search tasks" />
@@ -357,22 +370,75 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
       const tasks = filtered.filter((task) => taskWorkflowStatus(task, activeBoardField) === column);
       const totalInColumn = state.data.tasks.filter((task) => taskWorkflowStatus(task, activeBoardField) === column).length;
       const canReceiveTasks = column !== "Not set";
-      return <div className={`kanban-column ${draggedTaskId && canReceiveTasks ? "drag-active" : ""}`} key={column} onDragOver={(event) => { if (canReceiveTasks) event.preventDefault(); }} onDrop={(event) => {
+      const tone = workflowColumnTone(column);
+      return <div className={`kanban-column delivery-column tone-${tone} ${draggedTaskId && canReceiveTasks ? "drag-active" : ""}`} key={column} onDragOver={(event) => { if (canReceiveTasks) event.preventDefault(); }} onDrop={(event) => {
         event.preventDefault();
         const taskId = event.dataTransfer.getData("text/plain");
         const task = state.data.tasks.find((item) => item.id === taskId);
         if (task && canReceiveTasks) void moveTask(task, column);
       }}>
-        <header><div><strong>{column}</strong><span title={`${totalInColumn} task${totalInColumn === 1 ? "" : "s"} in this status`}>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
-        <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)}>
+        <header><div><i aria-hidden="true" /><strong>{column}</strong><span title={`${totalInColumn} task${totalInColumn === 1 ? "" : "s"} in this status`}>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
+        <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card tone-${tone} ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)} onClick={() => !draggedTaskId && setSelectedTaskId(task.id)} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !draggedTaskId) { event.preventDefault(); setSelectedTaskId(task.id); } }} tabIndex={0} role="button" aria-label={`Open details for ${task.title}`}>
           <div className="kanban-card-top"><TaskPill status={task.status} label={task.priority ?? "Normal"} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
           <h3 dir="auto">{task.title}</h3>{task.notes && <p dir="auto">{task.notes}</p>}
           <footer><span>{task.owner ?? "Unassigned"}</span>{task.dueDate && <span className={task.dueDate < today && task.status !== "done" ? "text-red" : ""}>{formatShortDate(task.dueDate)}</span>}</footer>
-          <label className="kanban-move">Move to<select value={taskWorkflowStatus(task, activeBoardField)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option} disabled={option === "Not set"}>{option}</option>)}</select></label>
+          <label className="kanban-move" onClick={(event) => event.stopPropagation()}>Move to<select value={taskWorkflowStatus(task, activeBoardField)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option} disabled={option === "Not set"}>{option}</option>)}</select></label>
         </article>)}{!tasks.length && <div className="kanban-empty">{canReceiveTasks ? "Drop task here" : "Tasks without a status"}</div>}</div>
       </div>;
-    })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>DEV status</th><th>Task status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={workflowToTaskStatus(task.developmentStatus ?? "")} label={task.developmentStatus ?? "—"} /></td><td><TaskPill status={workflowToTaskStatus(task.deliveryStatus ?? "")} label={task.deliveryStatus ?? "—"} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
+    })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>DEV status</th><th>Task status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id} onClick={() => setSelectedTaskId(task.id)} className="work-row"><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={workflowToTaskStatus(task.developmentStatus ?? "")} label={task.developmentStatus ?? "—"} /></td><td><TaskPill status={workflowToTaskStatus(task.deliveryStatus ?? "")} label={task.deliveryStatus ?? "—"} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
+    {selectedTask && <TaskDetailDialog key={`${selectedTask.id}-${activeBoardField}`} task={selectedTask} boardField={activeBoardField} boardColumns={boardColumns} spreadsheetId={state.data.spreadsheetId} isSaving={syncingTaskId === selectedTask.id} onClose={() => setSelectedTaskId(null)} onMove={moveTask} />}
   </div>;
+}
+
+function TaskDetailDialog({ task, boardField, boardColumns, spreadsheetId, isSaving, onClose, onMove }: {
+  task: Task;
+  boardField: BoardStatusField;
+  boardColumns: string[];
+  spreadsheetId?: string;
+  isSaving: boolean;
+  onClose: () => void;
+  onMove: (task: Task, status: string) => Promise<boolean>;
+}) {
+  const currentStatus = taskWorkflowStatus(task, boardField);
+  const moveOptions = currentStatus === "Not set" ? ["Not set", ...boardColumns.filter((status) => status !== "Not set")] : boardColumns.filter((status) => status !== "Not set");
+  const [nextStatus, setNextStatus] = useState(currentStatus);
+  const [copied, setCopied] = useState(false);
+  const sourceUrl = spreadsheetId ? `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/edit` : undefined;
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const copyDetails = async () => {
+    const text = [
+      task.title,
+      `Priority: ${task.priority ?? "Not set"}`,
+      `Owner: ${task.owner ?? "Unassigned"}`,
+      `Development status: ${task.developmentStatus ?? "Not set"}`,
+      `Task status: ${task.deliveryStatus ?? "Not set"}`,
+      task.notes
+    ].filter(Boolean).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return <div className="task-detail-backdrop" role="presentation"><section className="task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+    <header className="task-detail-header"><div><p className="eyebrow">Task brief</p><h2 id="task-detail-title" dir="auto">{task.title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close task details"><X size={22} /></button></header>
+    <div className="task-detail-body">
+      <div className="detail-status-line"><span className={`detail-tone tone-${workflowColumnTone(currentStatus)}`}><i />{boardStatusLabel[boardField]} · {currentStatus}</span>{task.priority && <TaskPill status={task.status} label={task.priority} />}</div>
+      <dl className="task-facts"><div><dt>Owner</dt><dd>{task.owner ?? "Unassigned"}</dd></div><div><dt>Development status</dt><dd>{task.developmentStatus ?? "Not set"}</dd></div><div><dt>Task status</dt><dd>{task.deliveryStatus ?? "Not set"}</dd></div><div><dt>Start date</dt><dd>{formatDate(task.startDate)}</dd></div></dl>
+      <section className="task-detail-copy"><h3>Details</h3>{task.notes ? <p dir="auto">{task.notes}</p> : <p className="empty-detail">No extra task details were provided in the Sheet.</p>}</section>
+      <section className="task-status-action"><div><span>Move {boardStatusLabel[boardField].toLowerCase()}</span><strong>Update the matching Sheet column only</strong></div><select value={nextStatus} onChange={(event) => setNextStatus(event.target.value)} disabled={isSaving}>{moveOptions.map((status) => <option key={status} value={status} disabled={status === "Not set"}>{status}</option>)}</select><button className="button primary" onClick={async () => { if (await onMove(task, nextStatus)) onClose(); }} disabled={isSaving || nextStatus === currentStatus || nextStatus === "Not set"}>{isSaving ? <LoaderCircle className="spin" size={16} /> : "Update"}</button></section>
+    </div>
+    <footer className="task-detail-footer"><div>{sourceUrl && <a className="button secondary" href={sourceUrl} target="_blank" rel="noreferrer"><ExternalLink size={16} />Open Sheet</a>}<button className="button secondary" onClick={() => void copyDetails()}><Clipboard size={16} />{copied ? "Copied" : "Copy task"}</button></div><button className="button quiet" onClick={onClose}>Close</button></footer>
+  </section></div>;
 }
 
 function ConnectModal({ session, state, onClose, onSession, onImport }: { session: Session; state: PortfolioState; onClose: () => void; onSession: (session: Session) => void; onImport: (state: PortfolioState) => void }) {
