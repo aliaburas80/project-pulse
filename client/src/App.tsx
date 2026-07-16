@@ -230,12 +230,36 @@ function workflowToTaskStatus(workflowStatus: string): Task["status"] {
   return "not_started";
 }
 
-function taskWorkflowStatus(task: Task) {
-  return task.workflowStatus?.trim() || statusLabel[task.status];
+type BoardStatusField = "development" | "delivery";
+
+const boardStatusLabel: Record<BoardStatusField, string> = {
+  development: "Development status",
+  delivery: "Task status"
+};
+
+function taskWorkflowStatus(task: Task, field: BoardStatusField) {
+  const status = field === "development"
+    ? task.developmentStatus ?? task.workflowStatus
+    : task.deliveryStatus ?? task.workflowStatus;
+  return status?.trim() || "Not set";
+}
+
+function hasStatusField(task: Task, field: BoardStatusField) {
+  if (field === "development") {
+    return task.developmentStatus !== undefined || task.source?.developmentStatusColumn !== undefined || task.source?.statusColumn !== undefined;
+  }
+  return task.deliveryStatus !== undefined || task.source?.deliveryStatusColumn !== undefined;
+}
+
+function statusColumnFor(task: Task, field: BoardStatusField) {
+  return field === "development"
+    ? task.source?.developmentStatusColumn ?? task.source?.statusColumn
+    : task.source?.deliveryStatusColumn;
 }
 
 function workflowColumnOrder(status: string) {
   const value = status.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+  if (value === "not set") return 90;
   if (/backlog|pending|not started/.test(value)) return 10;
   if (/to do|todo|ready to start/.test(value)) return 20;
   if (/progress|development|developing|in dev|active/.test(value)) return 30;
@@ -248,32 +272,38 @@ function workflowColumnOrder(status: string) {
 
 function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void; onOpenConnect: () => void }) {
   const [query, setQuery] = useState("");
+  const [boardField, setBoardField] = useState<BoardStatusField>("development");
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [mode, setMode] = useState<"list" | "board">("board");
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projectNames = useMemo(() => new Map(state.metrics.projectMetrics.map((project) => [project.id, project.name])), [state.metrics.projectMetrics]);
+  const availableBoardFields = useMemo(() => (Object.keys(boardStatusLabel) as BoardStatusField[])
+    .filter((field) => state.data.tasks.some((task) => hasStatusField(task, field))), [state.data.tasks]);
+  const activeBoardField = availableBoardFields.includes(boardField) ? boardField : availableBoardFields[0] ?? "development";
   const filtered = useMemo(() => state.data.tasks.filter((task) => {
-    const workflowStatus = taskWorkflowStatus(task);
-    const searchable = [task.title, task.owner, task.priority, task.notes, workflowStatus, projectNames.get(task.projectId)]
+    const workflowStatus = taskWorkflowStatus(task, activeBoardField);
+    const searchable = [task.title, task.owner, task.priority, task.notes, task.developmentStatus, task.deliveryStatus, projectNames.get(task.projectId)]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
     return (workflowFilter === "all" || workflowStatus === workflowFilter) && searchable.includes(query.trim().toLowerCase());
-  }), [state.data.tasks, workflowFilter, query, projectNames]);
+  }), [state.data.tasks, activeBoardField, workflowFilter, query, projectNames]);
   const boardColumns = useMemo(() => {
-    return [...new Set(state.data.tasks.map(taskWorkflowStatus))]
+    return [...new Set(state.data.tasks.map((task) => taskWorkflowStatus(task, activeBoardField)))]
       .sort((left, right) => {
         return workflowColumnOrder(left) - workflowColumnOrder(right) || left.localeCompare(right);
       });
-  }, [state.data.tasks]);
+  }, [state.data.tasks, activeBoardField]);
 
   if (state.data.source === "empty") return <EmptyPortfolioState onOpenConnect={onOpenConnect} />;
 
   const moveTask = async (task: Task, workflowStatus: string) => {
-    if ((task.workflowStatus ?? statusLabel[task.status]) === workflowStatus || syncingTaskId) return;
-    if (state.data.source !== "google_sheets" || !state.data.spreadsheetId || !task.source) {
+    const statusColumn = statusColumnFor(task, activeBoardField);
+    if (taskWorkflowStatus(task, activeBoardField) === workflowStatus || syncingTaskId) return;
+    if (workflowStatus === "Not set") return;
+    if (state.data.source !== "google_sheets" || !state.data.spreadsheetId || !task.source || !statusColumn) {
       setError("Connect and import a Google Sheet before moving tasks.");
       return;
     }
@@ -283,12 +313,18 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
       ...state,
       data: {
         ...state.data,
-        tasks: state.data.tasks.map((item) => item.id === task.id ? { ...item, workflowStatus, status: workflowToTaskStatus(workflowStatus) } : item)
+        tasks: state.data.tasks.map((item) => {
+          if (item.id !== task.id) return item;
+          const developmentStatus = activeBoardField === "development" ? workflowStatus : item.developmentStatus;
+          const deliveryStatus = activeBoardField === "delivery" ? workflowStatus : item.deliveryStatus;
+          const effectiveStatus = deliveryStatus ?? developmentStatus ?? workflowStatus;
+          return { ...item, developmentStatus, deliveryStatus, workflowStatus: developmentStatus ?? deliveryStatus ?? "Not set", status: workflowToTaskStatus(effectiveStatus) };
+        })
       }
     };
     onStateChange(optimistic);
     try {
-      await api.updateTaskStatus({ spreadsheetId: state.data.spreadsheetId, ...task.source, workflowStatus });
+      await api.updateTaskStatus({ spreadsheetId: state.data.spreadsheetId, sheetTitle: task.source.sheetTitle, rowNumber: task.source.rowNumber, statusColumn, workflowStatus });
       const refreshed = await api.importSheet(state.data.spreadsheetId);
       onStateChange(refreshed);
     } catch (reason) {
@@ -311,29 +347,31 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
     <div className="task-toolbar">
       <div className="work-filters">
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, priority, notes, or project…" aria-label="Search tasks" />
+        {availableBoardFields.length > 1 && <select value={activeBoardField} onChange={(event) => { setBoardField(event.target.value as BoardStatusField); setWorkflowFilter("all"); }} aria-label="Choose status column">{availableBoardFields.map((field) => <option key={field} value={field}>{boardStatusLabel[field]}</option>)}</select>}
         <select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)} aria-label="Filter by workflow status"><option value="all">All sheet statuses</option>{boardColumns.map((column) => <option key={column} value={column}>{column}</option>)}</select>
       </div>
       <div className="view-switch" aria-label="Task view"><button className={mode === "board" ? "active" : ""} onClick={() => setMode("board")}>Board</button><button className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>List</button></div>
     </div>
     {error && <div className="error-message task-error"><AlertTriangle size={17} />{error}</div>}
     {mode === "board" ? <section className="kanban-board">{boardColumns.map((column) => {
-      const tasks = filtered.filter((task) => taskWorkflowStatus(task) === column);
-      const totalInColumn = state.data.tasks.filter((task) => taskWorkflowStatus(task) === column).length;
-      return <div className={`kanban-column ${draggedTaskId ? "drag-active" : ""}`} key={column} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+      const tasks = filtered.filter((task) => taskWorkflowStatus(task, activeBoardField) === column);
+      const totalInColumn = state.data.tasks.filter((task) => taskWorkflowStatus(task, activeBoardField) === column).length;
+      const canReceiveTasks = column !== "Not set";
+      return <div className={`kanban-column ${draggedTaskId && canReceiveTasks ? "drag-active" : ""}`} key={column} onDragOver={(event) => { if (canReceiveTasks) event.preventDefault(); }} onDrop={(event) => {
         event.preventDefault();
         const taskId = event.dataTransfer.getData("text/plain");
         const task = state.data.tasks.find((item) => item.id === taskId);
-        if (task) void moveTask(task, column);
+        if (task && canReceiveTasks) void moveTask(task, column);
       }}>
         <header><div><strong>{column}</strong><span title={`${totalInColumn} task${totalInColumn === 1 ? "" : "s"} in this status`}>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
         <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)}>
           <div className="kanban-card-top"><TaskPill status={task.status} label={task.priority ?? "Normal"} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
           <h3 dir="auto">{task.title}</h3>{task.notes && <p dir="auto">{task.notes}</p>}
           <footer><span>{task.owner ?? "Unassigned"}</span>{task.dueDate && <span className={task.dueDate < today && task.status !== "done" ? "text-red" : ""}>{formatShortDate(task.dueDate)}</span>}</footer>
-          <label className="kanban-move">Move to<select value={taskWorkflowStatus(task)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option}>{option}</option>)}</select></label>
-        </article>)}{!tasks.length && <div className="kanban-empty">Drop task here</div>}</div>
+          <label className="kanban-move">Move to<select value={taskWorkflowStatus(task, activeBoardField)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option} disabled={option === "Not set"}>{option}</option>)}</select></label>
+        </article>)}{!tasks.length && <div className="kanban-empty">{canReceiveTasks ? "Drop task here" : "Tasks without a status"}</div>}</div>
       </div>;
-    })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>Workflow status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={task.status} label={task.workflowStatus} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
+    })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>DEV status</th><th>Task status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={workflowToTaskStatus(task.developmentStatus ?? "")} label={task.developmentStatus ?? "—"} /></td><td><TaskPill status={workflowToTaskStatus(task.deliveryStatus ?? "")} label={task.deliveryStatus ?? "—"} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
   </div>;
 }
 
