@@ -34,11 +34,15 @@ export interface Task {
   labels?: string[];
   isMilestone?: boolean;
   notes?: string;
+  developmentStatus?: string;
+  deliveryStatus?: string;
   workflowStatus?: string;
   source?: {
     sheetTitle: string;
     rowNumber: number;
-    statusColumn: number;
+    developmentStatusColumn?: number;
+    deliveryStatusColumn?: number;
+    statusColumn?: number;
   };
 }
 
