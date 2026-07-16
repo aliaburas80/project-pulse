@@ -1,5 +1,5 @@
 import { getPortfolioMetrics, parseSheets } from "../../server/portfolio";
-import type { PortfolioData, PortfolioMetrics, Session, SheetFile } from "./types";
+import type { ActivityEvent, PortfolioData, PortfolioMetrics, Session, SheetFile } from "./types";
 
 export interface TaskStatusUpdate {
   spreadsheetId: string;
@@ -7,6 +7,17 @@ export interface TaskStatusUpdate {
   rowNumber: number;
   statusColumn: number;
   workflowStatus: string;
+}
+
+export interface ActivityEventInput {
+  spreadsheetId: string;
+  taskId?: string;
+  taskTitle: string;
+  owner?: string;
+  statusField: string;
+  fromStatus?: string;
+  toStatus: string;
+  sourceSheet?: string;
 }
 
 type GoogleTokenResponse = { access_token?: string; expires_in?: number; error?: string; error_description?: string };
@@ -26,6 +37,7 @@ declare global {
 
 // OAuth client IDs identify the app publicly; they are safe to include in a browser-only deployment.
 const clientId = "1048383690442-gvustjokcqe3vrhj5hhganikeg8t2er9.apps.googleusercontent.com";
+const activitySheetTitle = "Project Pulse Activity";
 const scopes = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive.metadata.readonly",
@@ -108,6 +120,34 @@ function extractSpreadsheetId(input: string) {
   return matched?.[1] ?? input.trim();
 }
 
+function activityRange(cellRange: string) {
+  return `'${activitySheetTitle}'!${cellRange}`;
+}
+
+async function ensureActivityLog(spreadsheetId: string): Promise<void> {
+  const metadata = await googleFetch<{ sheets?: { properties?: { title?: string } }[] }>(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(title)`);
+  const alreadyExists = (metadata.sheets ?? []).some((sheet) => sheet.properties?.title === activitySheetTitle);
+  if (alreadyExists) return;
+  await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+    method: "POST",
+    body: JSON.stringify({ requests: [{ addSheet: { properties: { title: activitySheetTitle } } }] })
+  });
+  await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(activityRange("A1:H1"))}?valueInputOption=USER_ENTERED`, {
+    method: "PUT",
+    body: JSON.stringify({ values: [["Event Timestamp", "Task ID", "Task", "Owner", "Status Field", "From Status", "To Status", "Source Sheet"]] })
+  });
+}
+
+async function recordActivity(event: ActivityEventInput): Promise<ActivityEvent> {
+  await ensureActivityLog(event.spreadsheetId);
+  const timestamp = new Date().toISOString();
+  await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(event.spreadsheetId)}/values/${encodeURIComponent(activityRange("A:H"))}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, {
+    method: "POST",
+    body: JSON.stringify({ values: [[timestamp, event.taskId ?? "", event.taskTitle, event.owner ?? "", event.statusField, event.fromStatus ?? "", event.toStatus, event.sourceSheet ?? ""]] })
+  });
+  return { timestamp, taskId: event.taskId, taskTitle: event.taskTitle, owner: event.owner, statusField: event.statusField, fromStatus: event.fromStatus, toStatus: event.toStatus, sourceSheet: event.sourceSheet };
+}
+
 async function importSheet(spreadsheetIdOrUrl: string): Promise<{ data: PortfolioData; metrics: PortfolioMetrics }> {
   const spreadsheetId = extractSpreadsheetId(spreadsheetIdOrUrl);
   const metadata = await googleFetch<{ properties?: { title?: string }; sheets?: { properties?: { title?: string; sheetType?: string } }[] }>(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?includeGridData=false&fields=properties(title),sheets.properties(title,sheetType)`);
@@ -151,6 +191,8 @@ export const api = {
     });
     return { status: "updated", workflowStatus: update.workflowStatus };
   },
+  startActivityTracking: async (spreadsheetId: string): Promise<void> => ensureActivityLog(spreadsheetId),
+  recordActivity,
   disconnect: async (): Promise<void> => {
     accessToken = null;
     tokenExpiresAt = 0;
