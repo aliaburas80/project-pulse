@@ -33,8 +33,17 @@ export interface Task {
   dependency?: string;
   labels?: string[];
   notes?: string;
+  developmentStatus?: string;
+  deliveryStatus?: string;
   workflowStatus?: string;
-  source?: { sheetTitle: string; rowNumber: number; statusColumn: number };
+  source?: {
+    sheetTitle: string;
+    rowNumber: number;
+    developmentStatusColumn?: number;
+    deliveryStatusColumn?: number;
+    /** Supports portfolios cached before separate status columns were introduced. */
+    statusColumn?: number;
+  };
 }
 
 export interface Risk { id: string; projectId?: string; title: string; owner?: string; level?: string; status?: string; dueDate?: string }
