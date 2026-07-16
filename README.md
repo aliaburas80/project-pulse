@@ -1,6 +1,6 @@
 # Project Pulse
 
-Project Pulse is a mobile-first Node.js dashboard for project managers. It reads a Google Sheets portfolio and turns it into a clear view of project health, task progress, blockers, overdue work, risks, milestones, and a per-project Gantt timeline.
+Project Pulse is a mobile-first dashboard for project managers. It reads a Google Sheet directly in the browser and turns it into a clear view of project health, task progress, blockers, overdue work, risks, milestones, and a per-project Gantt timeline.
 
 It is designed for a PM who needs answers quickly:
 
@@ -16,7 +16,7 @@ It is designed for a PM who needs answers quickly:
 - Portfolio health derived from project health fields, overdue/blocked work, due-date pressure, and high/critical risks.
 - Searchable task viewer, drag-and-drop Kanban board (with a touch-friendly Move to control), project cards, analytics, attention list, milestone tracking, and responsive Gantt charts.
 - Clean empty state until you connect and import a Google Sheet; the app never displays sample tasks as your work.
-- Stateless encrypted session cookies; it does not persist a copy of your Sheet data on the server.
+- No backend server and no copy of your Sheet is stored by the application; Google access stays in the browser session.
 
 ## Recommended Google Sheet structure
 
@@ -62,52 +62,42 @@ These are intentionally transparent defaults. They are easy to refine later into
 ## Run locally
 
 ```bash
-cp .env.example .env
 npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173` during local development. The Vite development server proxies API requests to the Node.js server at port `3000`.
+Open `http://localhost:5173` during local development.
 
 ```bash
 npm test
 npm run build
-npm start
 ```
 
-The production server listens on `PORT` (default `3000`) and serves the built React app plus the API.
+The production build is a static GitHub Pages site.
 
 ## Connect Google Sheets
 
 1. In Google Cloud Console, create or select a project.
-2. Configure the OAuth consent screen as an External app, add yourself as a test user while it is in testing, then create an **OAuth client ID** of type **Web application**.
-3. Add this Authorized redirect URI locally: `http://localhost:3000/api/auth/google/callback`.
-4. Add the deployed Render URL after deployment: `https://YOUR-SERVICE.onrender.com/api/auth/google/callback`.
-5. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_PASSWORD`, and `APP_URL` in `.env` locally or Render Environment variables.
+2. Configure the OAuth consent screen as an External app and add yourself as a test user while it is in testing.
+3. In **Clients**, add this Authorized JavaScript origin: `https://aliaburas80.github.io`.
+4. Enable both **Google Sheets API** and **Google Drive API** for the project.
 
-The integration requests `spreadsheets` access, Drive metadata read-only (to list spreadsheets), and the Google account email used for the connection. Dragging a task changes only the mapped workflow-status cell (for example, `Status (DEV)`) in that spreadsheet. Reconnect Google after upgrading from an older read-only version so it can grant this permission.
+The integration requests `spreadsheets` access, Drive metadata read-only (to list spreadsheets), and the Google account email used for the connection. Dragging a task changes only the mapped workflow-status cell (for example, `Status (DEV)`) in that spreadsheet.
 
-## Deploy on Render
+## Deploy on GitHub Pages
 
-This repository includes `render.yaml`.
+The GitHub Actions workflow deploys every push to `main`.
 
-1. Push this project to GitHub.
-2. In Render, select **New → Blueprint** and choose the repository. Render will read `render.yaml`.
-3. Create the service, then set `APP_URL` to the final Render URL, for example `https://project-pulse.onrender.com`.
-4. Add the Google OAuth variables from above. Keep `GOOGLE_CLIENT_SECRET` and `SESSION_PASSWORD` secret.
-5. Add the final Render callback URL to the OAuth client in Google Cloud, then redeploy.
-
-The Blueprint defaults to Render's free plan so it does not assume a paid service. Change `plan: free` to your preferred instance type if you need an always-on service.
+In the repository, open **Settings → Pages** and select **GitHub Actions** as the build source. The site will then be available at `https://aliaburas80.github.io/project-pulse/`.
 
 ## Architecture
 
 ```text
-Google Sheets → Google OAuth → Node/Express API → Smart parser + portfolio metrics → React dashboard + Kanban status updates
+Google Sheets → Google OAuth in the browser → Smart parser + portfolio metrics → React dashboard + Kanban status updates
 ```
 
-- **Server:** Node.js, Express 5, TypeScript, Google APIs, Zod validation, Helmet, rate limiting.
-- **Client:** React, Vite, responsive CSS, Recharts loaded only when the dashboard chart is viewed.
-- **Persistence:** no server-side portfolio database. The most recently imported portfolio is cached only in the signed-in browser, while live Sheets remain the source of truth.
+- **Client:** React, Vite, browser-based Google Identity Services, responsive CSS, Recharts loaded only when the dashboard chart is viewed.
+- **Persistence:** the most recently imported portfolio is cached only in the browser, while live Sheets remain the source of truth.
 
 ## Quality checks
 
