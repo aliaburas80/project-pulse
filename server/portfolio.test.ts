@@ -39,11 +39,12 @@ test("maps the Sheet1 task layout and keeps the Status (DEV) cell reference", ()
 
 test("keeps development and delivery statuses separate for a task table", () => {
   const data = parseSheets([
-    { title: "Sheet1", values: [["Task", "Priority", "Owner", "Status", "Start date", "Status (DEV)"], ["إرسال إشعار", "Very High", "Ragheb & Yarob", "Completed", "", "Ready to test"]] }
+    { title: "النواقص", values: [["Task", "Notification Body", "Priority", "Owner", "Status", "Start date", "Status (DEV)"], ["إرسال إشعار", "نص الإشعار الكامل", "Very High", "Ragheb & Yarob", "Completed", "", "Ready to test"]] }
   ]);
 
   assert.equal(data.tasks[0].developmentStatus, "Ready to test");
   assert.equal(data.tasks[0].deliveryStatus, "Completed");
+  assert.equal(data.tasks[0].notes, "نص الإشعار الكامل");
   assert.equal(data.tasks[0].status, "done");
-  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Sheet1", rowNumber: 2, developmentStatusColumn: 6, deliveryStatusColumn: 4 });
+  assert.deepEqual(data.tasks[0].source, { sheetTitle: "النواقص", rowNumber: 2, developmentStatusColumn: 7, deliveryStatusColumn: 5 });
 });
