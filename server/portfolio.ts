@@ -121,8 +121,8 @@ function toRows(values: unknown[][], sheetTitle: string): Row[] {
   const records = values.slice(headerIndex + 1);
   if (!headerRow?.length) return [];
   const headers = headerRow.map(normaliseHeader);
-  const statusHeader = aliases.status.find((candidate) => headers.includes(candidate));
-  const statusColumn = statusHeader ? headers.indexOf(statusHeader) + 1 : undefined;
+  const developmentStatusColumn = headers.includes("status dev") ? headers.indexOf("status dev") + 1 : undefined;
+  const deliveryStatusColumn = headers.includes("status") ? headers.indexOf("status") + 1 : undefined;
   return records
     .map((record, index) => ({ record, rowNumber: index + headerIndex + 2 }))
     .filter(({ record }) => record.some((cell) => asText(cell)))
@@ -130,7 +130,8 @@ function toRows(values: unknown[][], sheetTitle: string): Row[] {
       ...Object.fromEntries(headers.map((header, index) => [header, record[index]])),
       __sheetTitle: sheetTitle,
       __rowNumber: rowNumber,
-      __statusColumn: statusColumn
+      __developmentStatusColumn: developmentStatusColumn,
+      __deliveryStatusColumn: deliveryStatusColumn
     }));
 }
 
@@ -186,13 +187,16 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string, spreads
     const projectId = suppliedProject
       ?? (suppliedProjectName ? projectByName.get(suppliedProjectName.toLowerCase()) : undefined)
       ?? "IMPORTED_WORK";
+    const developmentStatus = asText(row["status dev"]);
+    const deliveryStatus = asText(row.status);
+    const effectiveStatus = deliveryStatus ?? developmentStatus;
     return {
       id: rowKey(row, "taskId", `TASK-${index + 1}`),
       projectId,
       projectName: suppliedProjectName ?? spreadsheetName ?? "Imported work",
       title: rowKey(row, "taskTitle", `Untitled task ${index + 1}`),
       owner: asText(getField(row, "owner")),
-      status: asTaskStatus(getField(row, "status")),
+      status: asTaskStatus(effectiveStatus),
       priority: asText(getField(row, "priority")),
       startDate: asDate(getField(row, "startDate")),
       dueDate: asDate(getField(row, "dueDate")),
@@ -202,9 +206,17 @@ export function parseSheets(sheets: SheetRows, spreadsheetName?: string, spreads
       dependency: asText(getField(row, "dependency")),
       labels: asText(getField(row, "labels"))?.split(/[,;|]/).map((label) => label.trim()).filter(Boolean),
       notes: asText(getField(row, "notes")),
-      workflowStatus: asText(getField(row, "status")) ?? "To do",
-      source: typeof row.__sheetTitle === "string" && typeof row.__rowNumber === "number" && typeof row.__statusColumn === "number"
-        ? { sheetTitle: row.__sheetTitle, rowNumber: row.__rowNumber, statusColumn: row.__statusColumn }
+      developmentStatus,
+      deliveryStatus,
+      workflowStatus: developmentStatus ?? deliveryStatus ?? "Not set",
+      source: typeof row.__sheetTitle === "string" && typeof row.__rowNumber === "number"
+        && (typeof row.__developmentStatusColumn === "number" || typeof row.__deliveryStatusColumn === "number")
+        ? {
+            sheetTitle: row.__sheetTitle,
+            rowNumber: row.__rowNumber,
+            developmentStatusColumn: typeof row.__developmentStatusColumn === "number" ? row.__developmentStatusColumn : undefined,
+            deliveryStatusColumn: typeof row.__deliveryStatusColumn === "number" ? row.__deliveryStatusColumn : undefined
+          }
         : undefined
     };
   });
