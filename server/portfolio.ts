@@ -21,7 +21,7 @@ const aliases = {
   progress: ["progress", "% complete", "percent complete", "completion", "complete %", "completion %"],
   budget: ["budget", "planned budget", "budget amount"],
   actualCost: ["actual cost", "spent", "actual", "cost to date"],
-  notes: ["notes", "comment", "comments", "description"],
+  notes: ["notes", "comment", "comments", "description", "notification body"],
   effort: ["effort", "effort hours", "estimate", "estimated hours", "hours"],
   dependency: ["dependency", "dependencies", "blocked by", "depends on"],
   labels: ["labels", "tags", "category", "categories"],
