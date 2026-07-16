@@ -30,7 +30,20 @@ test("maps the Sheet1 task layout and keeps the Status (DEV) cell reference", ()
 
   assert.equal(data.tasks[0].title, "مراجعة واجهة الدخول");
   assert.equal(data.tasks[0].workflowStatus, "Ready to Test");
+  assert.equal(data.tasks[0].developmentStatus, "Ready to Test");
+  assert.equal(data.tasks[0].deliveryStatus, undefined);
   assert.equal(data.tasks[0].status, "in_progress");
-  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Sheet1", rowNumber: 4, statusColumn: 6 });
+  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Sheet1", rowNumber: 4, developmentStatusColumn: 6, deliveryStatusColumn: 4 });
   assert.equal(data.projects[0].name, "Khidmet Alalam work");
+});
+
+test("keeps development and delivery statuses separate for a task table", () => {
+  const data = parseSheets([
+    { title: "Sheet1", values: [["Task", "Priority", "Owner", "Status", "Start date", "Status (DEV)"], ["إرسال إشعار", "Very High", "Ragheb & Yarob", "Completed", "", "Ready to test"]] }
+  ]);
+
+  assert.equal(data.tasks[0].developmentStatus, "Ready to test");
+  assert.equal(data.tasks[0].deliveryStatus, "Completed");
+  assert.equal(data.tasks[0].status, "done");
+  assert.deepEqual(data.tasks[0].source, { sheetTitle: "Sheet1", rowNumber: 2, developmentStatusColumn: 6, deliveryStatusColumn: 4 });
 });
