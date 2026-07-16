@@ -279,6 +279,19 @@ function workflowColumnTone(status: string) {
   return "neutral";
 }
 
+function priorityTone(priority?: string) {
+  const value = priority?.toLowerCase() ?? "";
+  if (/very high|critical|urgent/.test(value)) return "critical";
+  if (/high/.test(value)) return "high";
+  if (/medium/.test(value)) return "medium";
+  if (/low/.test(value)) return "low";
+  return "neutral";
+}
+
+function PriorityPill({ priority }: { priority?: string }) {
+  return <span className={`priority-pill priority-${priorityTone(priority)}`}>{priority ?? "No priority"}</span>;
+}
+
 function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void; onOpenConnect: () => void }) {
   const [query, setQuery] = useState("");
   const [boardField, setBoardField] = useState<BoardStatusField>("development");
@@ -356,7 +369,7 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
   };
 
   return <div className="page-content delivery-desk">
-    <section className="page-heading"><div><p className="eyebrow">Delivery desk</p><h1>What needs movement today.</h1><p>Open a work card for the full brief, then move it only when the next step is clear.</p></div></section>
+    <section className="delivery-desk-heading"><div className="desk-title"><span className="pulse-mark" aria-hidden="true"><i /><i /><i /></span><div><p className="eyebrow">Project Pulse / Workroom</p><h1>Make the next move count.</h1><p>Open a card for the complete brief. Move it when the work has real momentum.</p></div></div><div className="desk-live"><span><i />Live sheet</span><strong>{filtered.length}</strong><small>cards in focus</small></div></section>
     <div className="task-toolbar">
       <div className="work-filters">
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, priority, notes, or project…" aria-label="Search tasks" />
@@ -379,7 +392,7 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
       }}>
         <header><div><i aria-hidden="true" /><strong>{column}</strong><span title={`${totalInColumn} task${totalInColumn === 1 ? "" : "s"} in this status`}>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
         <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card tone-${tone} ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)} onClick={() => !draggedTaskId && setSelectedTaskId(task.id)} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && !draggedTaskId) { event.preventDefault(); setSelectedTaskId(task.id); } }} tabIndex={0} role="button" aria-label={`Open details for ${task.title}`}>
-          <div className="kanban-card-top"><TaskPill status={task.status} label={task.priority ?? "Normal"} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
+          <div className="kanban-card-top"><PriorityPill priority={task.priority} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
           <h3 dir="auto">{task.title}</h3>{task.notes && <p dir="auto">{task.notes}</p>}
           <footer><span>{task.owner ?? "Unassigned"}</span>{task.dueDate && <span className={task.dueDate < today && task.status !== "done" ? "text-red" : ""}>{formatShortDate(task.dueDate)}</span>}</footer>
           <label className="kanban-move" onClick={(event) => event.stopPropagation()}>Move to<select value={taskWorkflowStatus(task, activeBoardField)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option} disabled={option === "Not set"}>{option}</option>)}</select></label>
@@ -429,10 +442,10 @@ function TaskDetailDialog({ task, boardField, boardColumns, spreadsheetId, isSav
     }
   };
 
-  return <div className="task-detail-backdrop" role="presentation"><section className="task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+  return <div className="task-detail-backdrop" role="presentation"><section className={`task-detail-panel tone-${workflowColumnTone(currentStatus)}`} role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
     <header className="task-detail-header"><div><p className="eyebrow">Task brief</p><h2 id="task-detail-title" dir="auto">{task.title}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close task details"><X size={22} /></button></header>
     <div className="task-detail-body">
-      <div className="detail-status-line"><span className={`detail-tone tone-${workflowColumnTone(currentStatus)}`}><i />{boardStatusLabel[boardField]} · {currentStatus}</span>{task.priority && <TaskPill status={task.status} label={task.priority} />}</div>
+      <div className="detail-status-line"><span className={`detail-tone tone-${workflowColumnTone(currentStatus)}`}><i />{boardStatusLabel[boardField]} · {currentStatus}</span><PriorityPill priority={task.priority} /></div>
       <dl className="task-facts"><div><dt>Owner</dt><dd>{task.owner ?? "Unassigned"}</dd></div><div><dt>Development status</dt><dd>{task.developmentStatus ?? "Not set"}</dd></div><div><dt>Task status</dt><dd>{task.deliveryStatus ?? "Not set"}</dd></div><div><dt>Start date</dt><dd>{formatDate(task.startDate)}</dd></div></dl>
       <section className="task-detail-copy"><h3>Details</h3>{task.notes ? <p dir="auto">{task.notes}</p> : <p className="empty-detail">No extra task details were provided in the Sheet.</p>}</section>
       <section className="task-status-action"><div><span>Move {boardStatusLabel[boardField].toLowerCase()}</span><strong>Update the matching Sheet column only</strong></div><select value={nextStatus} onChange={(event) => setNextStatus(event.target.value)} disabled={isSaving}>{moveOptions.map((status) => <option key={status} value={status} disabled={status === "Not set"}>{status}</option>)}</select><button className="button primary" onClick={async () => { if (await onMove(task, nextStatus)) onClose(); }} disabled={isSaving || nextStatus === currentStatus || nextStatus === "Not set"}>{isSaving ? <LoaderCircle className="spin" size={16} /> : "Update"}</button></section>
