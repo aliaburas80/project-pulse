@@ -1,4 +1,5 @@
 name: Deploy Project Pulse to GitHub Pages
+run-name: Deploy Project Pulse
 
 on:
   push:
