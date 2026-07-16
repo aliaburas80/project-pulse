@@ -230,28 +230,42 @@ function workflowToTaskStatus(workflowStatus: string): Task["status"] {
   return "not_started";
 }
 
+function taskWorkflowStatus(task: Task) {
+  return task.workflowStatus?.trim() || statusLabel[task.status];
+}
+
+function workflowColumnOrder(status: string) {
+  const value = status.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+  if (/backlog|pending|not started/.test(value)) return 10;
+  if (/to do|todo|ready to start/.test(value)) return 20;
+  if (/progress|development|developing|in dev|active/.test(value)) return 30;
+  if (/ready.*test|qa ready|review/.test(value)) return 40;
+  if (/testing|qa/.test(value)) return 50;
+  if (/done|complete|closed|resolved|finished/.test(value)) return 60;
+  if (/cancel|wont do|won't do/.test(value)) return 70;
+  return 80;
+}
+
 function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioState; onStateChange: (state: PortfolioState) => void; onOpenConnect: () => void }) {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<"all" | Task["status"]>("all");
+  const [workflowFilter, setWorkflowFilter] = useState("all");
   const [mode, setMode] = useState<"list" | "board">("board");
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projectNames = useMemo(() => new Map(state.metrics.projectMetrics.map((project) => [project.id, project.name])), [state.metrics.projectMetrics]);
   const filtered = useMemo(() => state.data.tasks.filter((task) => {
-    const searchable = [task.title, task.owner, task.priority, task.notes, task.workflowStatus, projectNames.get(task.projectId)]
+    const workflowStatus = taskWorkflowStatus(task);
+    const searchable = [task.title, task.owner, task.priority, task.notes, workflowStatus, projectNames.get(task.projectId)]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
-    return (status === "all" || task.status === status) && searchable.includes(query.trim().toLowerCase());
-  }), [state.data.tasks, status, query, projectNames]);
+    return (workflowFilter === "all" || workflowStatus === workflowFilter) && searchable.includes(query.trim().toLowerCase());
+  }), [state.data.tasks, workflowFilter, query, projectNames]);
   const boardColumns = useMemo(() => {
-    const knownOrder = ["pending", "to do", "ready to start", "in progress", "ready to test", "in testing", "done"];
-    return [...new Set(state.data.tasks.map((task) => task.workflowStatus ?? statusLabel[task.status]))]
+    return [...new Set(state.data.tasks.map(taskWorkflowStatus))]
       .sort((left, right) => {
-        const leftIndex = knownOrder.indexOf(left.toLowerCase());
-        const rightIndex = knownOrder.indexOf(right.toLowerCase());
-        return (leftIndex < 0 ? knownOrder.length : leftIndex) - (rightIndex < 0 ? knownOrder.length : rightIndex) || left.localeCompare(right);
+        return workflowColumnOrder(left) - workflowColumnOrder(right) || left.localeCompare(right);
       });
   }, [state.data.tasks]);
 
@@ -297,25 +311,26 @@ function WorkView({ state, onStateChange, onOpenConnect }: { state: PortfolioSta
     <div className="task-toolbar">
       <div className="work-filters">
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search task, owner, priority, notes, or project…" aria-label="Search tasks" />
-        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} aria-label="Filter by status"><option value="all">All statuses</option>{Object.entries(statusLabel).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
+        <select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)} aria-label="Filter by workflow status"><option value="all">All sheet statuses</option>{boardColumns.map((column) => <option key={column} value={column}>{column}</option>)}</select>
       </div>
       <div className="view-switch" aria-label="Task view"><button className={mode === "board" ? "active" : ""} onClick={() => setMode("board")}>Board</button><button className={mode === "list" ? "active" : ""} onClick={() => setMode("list")}>List</button></div>
     </div>
     {error && <div className="error-message task-error"><AlertTriangle size={17} />{error}</div>}
     {mode === "board" ? <section className="kanban-board">{boardColumns.map((column) => {
-      const tasks = filtered.filter((task) => (task.workflowStatus ?? statusLabel[task.status]) === column);
+      const tasks = filtered.filter((task) => taskWorkflowStatus(task) === column);
+      const totalInColumn = state.data.tasks.filter((task) => taskWorkflowStatus(task) === column).length;
       return <div className={`kanban-column ${draggedTaskId ? "drag-active" : ""}`} key={column} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
         event.preventDefault();
         const taskId = event.dataTransfer.getData("text/plain");
         const task = state.data.tasks.find((item) => item.id === taskId);
         if (task) void moveTask(task, column);
       }}>
-        <header><div><strong>{column}</strong><span>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
+        <header><div><strong>{column}</strong><span title={`${totalInColumn} task${totalInColumn === 1 ? "" : "s"} in this status`}>{tasks.length}</span></div><MoreHorizontal size={18} /></header>
         <div className="kanban-cards">{tasks.map((task) => <article className={`kanban-card ${draggedTaskId === task.id ? "dragging" : ""}`} key={task.id} draggable={syncingTaskId !== task.id} onDragStart={(event) => onTaskDragStart(event, task.id)} onDragEnd={() => setDraggedTaskId(null)}>
           <div className="kanban-card-top"><TaskPill status={task.status} label={task.priority ?? "Normal"} /><span>{syncingTaskId === task.id ? <LoaderCircle className="spin" size={15} /> : task.owner?.split(/\s|&/).filter(Boolean).slice(0, 2).map((name) => name[0]).join("") || "?"}</span></div>
           <h3 dir="auto">{task.title}</h3>{task.notes && <p dir="auto">{task.notes}</p>}
           <footer><span>{task.owner ?? "Unassigned"}</span>{task.dueDate && <span className={task.dueDate < today && task.status !== "done" ? "text-red" : ""}>{formatShortDate(task.dueDate)}</span>}</footer>
-          <label className="kanban-move">Move to<select value={task.workflowStatus ?? statusLabel[task.status]} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option}>{option}</option>)}</select></label>
+          <label className="kanban-move">Move to<select value={taskWorkflowStatus(task)} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => void moveTask(task, event.target.value)} disabled={Boolean(syncingTaskId)}>{boardColumns.map((option) => <option value={option} key={option}>{option}</option>)}</select></label>
         </article>)}{!tasks.length && <div className="kanban-empty">Drop task here</div>}</div>
       </div>;
     })}</section> : <div className="panel"><div className="responsive-table"><table className="work-table"><thead><tr><th>Work item</th><th>Project</th><th>Owner</th><th>Workflow status</th><th>Due date</th><th>Progress</th></tr></thead><tbody>{filtered.map((task) => <tr key={task.id}><td><strong dir="auto">{task.title}</strong><small>{task.priority ?? "Normal"} priority{task.dependency ? ` · Depends on ${task.dependency}` : ""}</small></td><td>{projectNames.get(task.projectId) ?? task.projectName ?? "—"}</td><td>{task.owner ?? "—"}</td><td><TaskPill status={task.status} label={task.workflowStatus} /></td><td><span className={task.dueDate && task.dueDate < today && !["done", "cancelled"].includes(task.status) ? "text-red" : ""}>{formatDate(task.dueDate)}</span></td><td><Progress value={task.progress ?? (task.status === "done" ? 100 : task.status === "in_progress" ? 50 : 0)} compact /></td></tr>)}</tbody></table></div>{!filtered.length && <EmptyState icon={<ListTodo />} title="No work items found" description="Change your filter or search term." />}</div>}
